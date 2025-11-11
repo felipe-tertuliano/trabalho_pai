@@ -59,7 +59,7 @@ class AlzheimerApp:
         self.root = root
         self.root.title("Trabalho Prático - Diagnóstico de Alzheimer")
         self.root.geometry("1000x800")
-
+        
         # --- Variáveis de Estado ---
         self.current_font_size = 10
         self.dataframe = None  # Armazena o CSV
@@ -68,28 +68,38 @@ class AlzheimerApp:
         self.processed_image = None # Imagem PIL processada (segmentada)
         self.image_mask = None # Máscara (numpy) da segmentação
         self.features_df = None # DataFrame com características extraídas
-
+        
+        # --- Variáveis de Zoom ---
+        self.zoom_level_original = 1.0
+        self.zoom_level_processed = 1.0
+        self.pan_start_x_original = 0
+        self.pan_start_y_original = 0
+        self.pan_start_x_processed = 0
+        self.pan_start_y_processed = 0
+        self.is_panning_original = False
+        self.is_panning_processed = False
+        
         # Configura a fonte padrão
         self.default_font = font.nametofont("TkDefaultFont")
         self.default_font.configure(size=self.current_font_size)
-
+        
         # --- Layout Principal ---
         # Menu Superior
         self.create_menu()
-
+        
         # Frame Principal
         main_frame = ttk.Frame(root, padding="10")
         main_frame.pack(expand=True, fill=tk.BOTH)
-
+        
         # Frame de Exibição de Imagem (à esquerda)
         image_frame = ttk.Frame(main_frame, relief=tk.RIDGE, padding="5")
         image_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
-
+        
         self.lbl_image_original = ttk.Label(image_frame, text="Imagem Original")
         self.lbl_image_original.pack(pady=5)
         self.canvas_original = tk.Canvas(image_frame, bg="gray", width=400, height=400)
         self.canvas_original.pack(fill=tk.BOTH, expand=True)
-
+        
         self.lbl_image_processed = ttk.Label(image_frame, text="Imagem Processada (Segmentada)")
         self.lbl_image_processed.pack(pady=5)
         self.canvas_processed = tk.Canvas(image_frame, bg="gray", width=400, height=400)
@@ -98,7 +108,7 @@ class AlzheimerApp:
         # Frame de Controle e Log (à direita)
         control_frame = ttk.Frame(main_frame, width=300)
         control_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
-
+        
         self.lbl_csv_status = ttk.Label(control_frame, text="CSV não carregado", foreground="red")
         self.lbl_csv_status.pack(pady=5, fill=tk.X)
         
@@ -107,10 +117,16 @@ class AlzheimerApp:
         
         btn_load_image = ttk.Button(control_frame, text="Carregar Imagem", command=self.load_image)
         btn_load_image.pack(pady=5, fill=tk.X)
-
+        
+        btn_reset_original = ttk.Button(control_frame, text="Reiniciar Zoom Orig.", command=lambda: self.reset_zoom("original"))
+        btn_reset_original.pack(pady=5, fill=tk.X)
+        
+        btn_reset_processed = ttk.Button(control_frame, text="Reiniciar Zoom Proc.", command=lambda: self.reset_zoom("processed"))
+        btn_reset_processed.pack(pady=5, fill=tk.X)
+        
         # Separador
         ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
-
+        
         # Botões de Processamento
         btn_segment = ttk.Button(control_frame, text="1. Segmentar Ventrículos", command=self.segment_ventricles)
         btn_segment.pack(pady=5, fill=tk.X)
@@ -120,10 +136,10 @@ class AlzheimerApp:
         
         btn_scatterplot = ttk.Button(control_frame, text="3. Gerar Gráf. Dispersão", command=self.show_scatterplot)
         btn_scatterplot.pack(pady=5, fill=tk.X)
-
+        
         # Separador
         ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
-
+        
         # Botões de Modelos
         btn_class_shallow = ttk.Button(control_frame, text="Classif. Raso (XGBoost)", command=self.run_shallow_classifier)
         btn_class_shallow.pack(pady=5, fill=tk.X)
@@ -136,10 +152,13 @@ class AlzheimerApp:
         
         btn_regr_deep = ttk.Button(control_frame, text="Regressão Profunda (ResNet50)", command=self.run_deep_regressor)
         btn_regr_deep.pack(pady=5, fill=tk.X)
-
+        
         # Log
         self.log_text = tk.Text(control_frame, height=10, state=tk.DISABLED)
         self.log_text.pack(pady=10, fill=tk.BOTH, expand=True)
+        
+        # Configura os bindings do sistema depois da criação da interface
+        self.root.after(100, self.setup_bindings)
 
     def log(self, message):
         """ Adiciona uma mensagem ao log na GUI. """
@@ -187,6 +206,145 @@ class AlzheimerApp:
 
     # --- 3. FUNÇÕES DE CARREGAMENTO E EXIBIÇÃO ---
 
+    def setup_bindings(self):
+        """Configura os bindings do sistema."""
+        # Imagem original
+        self.canvas_original.bind("<MouseWheel>", lambda e: self.zoom_image(e, "original"))
+        self.canvas_original.bind("<Button-4>", lambda e: self.zoom_image(e, "original"))  # Linux zoom in
+        self.canvas_original.bind("<Button-5>", lambda e: self.zoom_image(e, "original"))  # Linux zoom out
+        self.canvas_original.bind("<ButtonPress-1>", lambda e: self.start_pan(e, "original"))
+        self.canvas_original.bind("<B1-Motion>", lambda e: self.pan_image(e, "original"))
+        self.canvas_original.bind("<ButtonRelease-1>", lambda e: self.stop_pan(e, "original"))
+        
+        # Imagem processada
+        self.canvas_processed.bind("<MouseWheel>", lambda e: self.zoom_image(e, "processed"))
+        self.canvas_processed.bind("<Button-4>", lambda e: self.zoom_image(e, "processed"))
+        self.canvas_processed.bind("<Button-5>", lambda e: self.zoom_image(e, "processed"))
+        self.canvas_processed.bind("<ButtonPress-1>", lambda e: self.start_pan(e, "processed"))
+        self.canvas_processed.bind("<B1-Motion>", lambda e: self.pan_image(e, "processed"))
+        self.canvas_processed.bind("<ButtonRelease-1>", lambda e: self.stop_pan(e, "processed"))
+
+    def zoom_image(self, event, canvas_type):
+        """Controle de zoom"""
+        if canvas_type == "original" and self.original_image is None:
+            return
+        if canvas_type == "processed" and self.processed_image is None:
+            return
+        
+        # Determinar a direção do zoom
+        if event.delta > 0 or event.num == 4:
+            # Aumentar o zoom
+            zoom_factor = 1.2
+        else:
+            # Diminuir o zoom
+            zoom_factor = 0.8
+        
+        # Atualizar nível do zoom
+        if canvas_type == "original":
+            self.zoom_level_original *= zoom_factor
+            self.zoom_level_original = max(0.1, min(5.0, self.zoom_level_original))  # Limit zoom
+            self.display_image_zoomed(
+                self.original_image, self.canvas_original, 
+                self.zoom_level_original,
+                "original",
+            )
+        else:
+            self.zoom_level_processed *= zoom_factor
+            self.zoom_level_processed = max(0.1, min(5.0, self.zoom_level_processed))
+            self.display_image_zoomed(
+                self.processed_image, self.canvas_processed,
+                self.zoom_level_processed,
+                "processed",
+            )
+
+    def display_image_zoomed(self, pil_image, canvas, zoom_level, canvas_type):
+        """Exibe imagem com zoom aplicado."""
+        if pil_image is None:
+            return
+        
+        canvas_width = canvas.winfo_width()
+        canvas_height = canvas.winfo_height()
+        
+        if canvas_width < 2 or canvas_height < 2:
+            canvas_width, canvas_height = 400, 400
+        
+        # Calcular novas dimensões com base no zoom
+        new_width = int(pil_image.width * zoom_level)
+        new_height = int(pil_image.height * zoom_level)
+        
+        # Redimensionar imagem
+        img_resized = pil_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        # Criar imagem
+        if canvas_type == "original":
+            self.tk_image_original = ImageTk.PhotoImage(img_resized)
+            img_tk = self.tk_image_original
+        else:
+            self.tk_image_processed = ImageTk.PhotoImage(img_resized)
+            img_tk = self.tk_image_processed
+        
+        # Limpar e redesenhar
+        canvas.delete("all")
+        canvas.create_image(
+            canvas_width // 2, canvas_height // 2,
+            anchor=tk.CENTER, image=img_tk
+        )
+
+    def start_pan(self, event, canvas_type):
+        """Iniciar operação de exibição"""
+        if canvas_type == "original":
+            self.is_panning_original = True
+            self.pan_start_x_original = event.x
+            self.pan_start_y_original = event.y
+            self.canvas_original.config(cursor="fleur")
+        else:
+            self.is_panning_processed = True
+            self.pan_start_x_processed = event.x
+            self.pan_start_y_processed = event.y
+            self.canvas_processed.config(cursor="fleur")
+
+    def pan_image(self, event, canvas_type):
+        """Exibe imagem por enquanto é arrastado."""
+        if canvas_type == "original" and self.is_panning_original:
+            # Calcula a distância
+            dx = event.x - self.pan_start_x_original
+            dy = event.y - self.pan_start_y_original
+            
+            # Move elementos do canvas
+            self.canvas_original.move("all", dx, dy)
+            
+            # Atualiza posições iniciais
+            self.pan_start_x_original = event.x
+            self.pan_start_y_original = event.y
+            
+        elif canvas_type == "processed" and self.is_panning_processed:
+            dx = event.x - self.pan_start_x_processed
+            dy = event.y - self.pan_start_y_processed
+            
+            self.canvas_processed.move("all", dx, dy)
+            self.pan_start_x_processed = event.x
+            self.pan_start_y_processed = event.y
+
+    def stop_pan(self, event, canvas_type):
+        """Parar operação de exibição"""
+        if canvas_type == "original":
+            self.is_panning_original = False
+            self.canvas_original.config(cursor="")
+        else:
+            self.is_panning_processed = False
+            self.canvas_processed.config(cursor="")
+
+    def reset_zoom(self, canvas_type):
+        """Reinicia zoom e display para default"""
+        if canvas_type == "original":
+            self.zoom_level_original = 1.0
+            if self.original_image is not None:
+                self.display_image(self.original_image, self.canvas_original)
+        else:
+            self.zoom_level_processed = 1.0
+            if self.processed_image is not None:
+                self.display_image(self.processed_image, self.canvas_processed)
+
     def load_csv(self):
         """ Carrega o arquivo CSV de demografia. """
         file_path = filedialog.askopenfilename(
@@ -197,9 +355,7 @@ class AlzheimerApp:
             return
 
         try:
-            self.dataframe = pd.read_csv(file_path) # Assumindo separador vírgula
-            # Tente com ';' se falhar
-            # self.dataframe = pd.read_csv(file_path, sep=';') 
+            self.dataframe = pd.read_csv(file_path, sep=';')
             
             # TODO: Pré-processar o CSV conforme item 9 [cite: 90]
             # Exemplo:
@@ -220,9 +376,9 @@ class AlzheimerApp:
         file_path = filedialog.askopenfilename(
             title="Selecione a imagem",
             filetypes=(
-                ("Imagens", "*.png *.jpg *.jpeg *.bmp"),
                 ("Nifti files", "*.nii *.nii.gz"),
-                ("All files", "*.*")
+                ("Imagens", "*.png *.jpg *.jpeg *.bmp"),
+                ("All files", "*.*"),
             )
         )
         if not file_path:
@@ -242,9 +398,9 @@ class AlzheimerApp:
                 # Ex: if len(img_data.shape) == 3: img_data = img_data[:, :, 134]
                 # Ou, se for um arquivo 2D salvo como Nifti:
                 if len(img_data.shape) == 3:
-                     # Assumindo que o slice coronal é o 2º eixo (Y)
-                     slice_idx = img_data.shape[1] // 2 
-                     img_data = img_data[:, slice_idx, :]
+                    # Assumindo que o slice coronal é o 2º eixo (Y)
+                    slice_idx = img_data.shape[1] // 2
+                    img_data = img_data[:, slice_idx, :]
 
                 # Normalizar para 8 bits (0-255)
                 img_data = (img_data - np.min(img_data)) / (np.max(img_data) - np.min(img_data))
@@ -267,6 +423,12 @@ class AlzheimerApp:
 
     def display_image(self, pil_image, canvas):
         """ Exibe uma imagem PIL em um canvas Tkinter, com zoom/redimensionamento. [cite: 76]"""
+        # Reinicia zoom ao exibir uma nova imagem
+        if canvas == self.canvas_original:
+            self.zoom_level_original = 1.0
+        else:
+            self.zoom_level_processed = 1.0
+        
         canvas_width = canvas.winfo_width()
         canvas_height = canvas.winfo_height()
         
@@ -276,14 +438,18 @@ class AlzheimerApp:
         # Redimensiona a imagem para caber no canvas mantendo a proporção
         img_resized = ImageOps.contain(pil_image, (canvas_width, canvas_height))
 
-        # TODO: Implementar zoom interativo (clique/scroll)
-        # Por enquanto, apenas ajusta ao tamanho
+        # Criar PhotoImage
+        if canvas == self.canvas_original:
+            self.tk_image_original = ImageTk.PhotoImage(img_resized)
+            img_tk = self.tk_image_original
+        else:
+            self.tk_image_processed = ImageTk.PhotoImage(img_resized)
+            img_tk = self.tk_image_processed
         
-        self.tk_image_original = ImageTk.PhotoImage(img_resized)
         canvas.delete("all")
         canvas.create_image(
             canvas_width / 2, canvas_height / 2,
-            anchor=tk.CENTER, image=self.tk_image_original
+            anchor=tk.CENTER, image=img_tk
         )
 
     # --- 4. FUNÇÕES DE PROCESSAMENTO DE IMAGEM ---
@@ -313,7 +479,7 @@ class AlzheimerApp:
         
         # Exemplo de Placeholder (Thresholding Simples):
         # Ventrículos são escuros (fluido) em T1
-        _, mask = cv2.threshold(img_cv, 40, 255, cv2.THRESH_BINARY) 
+        _, mask = cv2.threshold(img_cv, 40, 255, cv2.THRESH_BINARY)
         
         # Aplicar operações morfológicas para limpar o ruído
         kernel = np.ones((3,3), np.uint8)
@@ -439,7 +605,7 @@ class AlzheimerApp:
         
         # Exemplo de dados (SUBSTITUIR PELO MERGED_DF)
         # Você precisa ter um DataFrame com colunas: 'Area', 'Circularidade', 'Group'
-        # merged_df = ... 
+        # merged_df = ...
         
         # --- Placeholder ---
         self.log("TODO: Implementar lógica de merge e plot.")
@@ -615,19 +781,19 @@ class AlzheimerApp:
         
         # 3. Criar o modelo:
         #    img_shape = (224, 224, 3)
-        #    base_model = ResNet50(weights='imagenet', include_top=False, 
+        #    base_model = ResNet50(weights='imagenet', include_top=False,
         #                          input_tensor=Input(shape=img_shape))
-        #    
+        #
         #    # Congelar o modelo base (para fine-tuning) [cite: 97]
-        #    base_model.trainable = False 
+        #    base_model.trainable = False
         #
         #    # Adicionar camadas no topo
         #    x = base_model.output
         #    x = GlobalAveragePooling2D()(x)
         #    x = Dense(128, activation='relu')(x)
         #    # Saída binária (Demented/NonDemented)
-        #    predictions = Dense(1, activation='sigmoid')(x) 
-        #    
+        #    predictions = Dense(1, activation='sigmoid')(x)
+        #
         #    model = Model(inputs=base_model.input, outputs=predictions)
         
         # 4. Compilar o modelo:
@@ -669,8 +835,8 @@ class AlzheimerApp:
         #    x = GlobalAveragePooling2D()(x)
         #    x = Dense(128, activation='relu')(x)
         #    # Saída de regressão (idade) - 1 neurônio, ativação linear
-        #    predictions = Dense(1, activation='linear')(x) 
-        #    
+        #    predictions = Dense(1, activation='linear')(x)
+        #
         #    model = Model(inputs=base_model.input, outputs=predictions)
         
         # 3. Compilação diferente:

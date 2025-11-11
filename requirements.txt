@@ -1,1 +1,9 @@
-Flask==3.1.2
+Pillow
+numpy
+pandas
+opencv-python
+nibabel
+matplotlib
+scikit-learn
+xgboost
+tensorflow
