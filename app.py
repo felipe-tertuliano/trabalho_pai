@@ -4,7 +4,7 @@
 # GRUPO: [INSIRA OS NOMES/MATRÍCULAS AQUI]
 #
 # ESPECIFICAÇÕES:
-#   - Dataset: Coronal [cite: 51]
+#   - Dataset: Axial [cite: 51]
 #   - Regressor Raso: Regressão Linear [cite: 54]
 #   - Classificador Raso: XGBoost [cite: 55]
 #   - Modelos Profundos: ResNet50 [cite: 57]
@@ -68,6 +68,9 @@ class AlzheimerApp:
         self.processed_image = None # Imagem PIL processada (segmentada)
         self.image_mask = None # Máscara (numpy) da segmentação
         self.features_df = None # DataFrame com características extraídas
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.dataset_dir = os.path.join(base_dir, "axl")  # Dataset fixo (axial)
+        self.csv_path = None
         
         # --- Variáveis de Zoom ---
         self.zoom_level_original = 1.0
@@ -185,6 +188,81 @@ class AlzheimerApp:
         menu_bar.add_cascade(label="Acessibilidade", menu=help_menu)
         help_menu.add_command(label="Aumentar Fonte", command=self.increase_font)
         help_menu.add_command(label="Diminuir Fonte", command=self.decrease_font)
+
+    # --- Utilidades de Dados ---
+
+    def _normalize_numeric_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Converte colunas numéricas que vêm com vírgula decimal para float."""
+        numeric_candidates = [
+            'MR Delay', 'Age', 'EDUC', 'SES', 'MMSE', 'CDR',
+            'eTIV', 'nWBV', 'ASF'
+        ]
+        for col in numeric_candidates:
+            if col in df.columns:
+                df[col] = (
+                    df[col]
+                    .astype(str)
+                    .str.replace(',', '.', regex=False)
+                    .str.strip()
+                    .replace({'': np.nan, 'nan': np.nan})
+                )
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        return df
+
+    def _add_target_class(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Aplica a regra do enunciado para gerar a coluna Target_Class."""
+        if 'Group' not in df.columns:
+            raise KeyError("Coluna 'Group' não encontrada no CSV.")
+        if 'CDR' not in df.columns:
+            raise KeyError("Coluna 'CDR' não encontrada no CSV.")
+
+        def map_class(row):
+            group = str(row['Group']).strip()
+            if group == 'Nondemented':
+                return 'NonDemented'
+            if group == 'Demented':
+                return 'Demented'
+            if group == 'Converted':
+                cdr_value = row['CDR']
+                if pd.isna(cdr_value):
+                    return None
+                return 'Demented' if cdr_value > 0 else 'NonDemented'
+            return None
+
+        df['Target_Class'] = df.apply(map_class, axis=1)
+        df = df.dropna(subset=['Target_Class'])
+        return df
+
+    def _attach_image_paths(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Anexa caminhos absolutos das imagens de acordo com o corte sorteado."""
+        required_col = 'MRI ID'
+        if required_col not in df.columns:
+            raise KeyError(f"Coluna '{required_col}' não encontrada no CSV.")
+
+        suffix = "_axl.nii.gz"
+        df['ImageFilename'] = df[required_col].astype(str).str.strip() + suffix
+
+        def resolve_path(filename: str) -> str:
+            primary = os.path.join(self.dataset_dir, filename)
+            nested = os.path.join(self.dataset_dir, 'cor', filename)
+            if os.path.exists(primary):
+                return primary
+            if os.path.exists(nested):
+                return nested
+            return primary  # fallback, mesmo que não exista
+
+        df['ImagePath'] = df['ImageFilename'].apply(resolve_path)
+        df['ImageExists'] = df['ImagePath'].apply(os.path.exists)
+        missing = df[~df['ImageExists']]
+        if not os.path.isdir(self.dataset_dir):
+            self.log(
+                f"ATENÇÃO: Diretório '{self.dataset_dir}' não encontrado. Descompacte o dataset antes de prosseguir."
+            )
+        elif not missing.empty:
+            self.log(
+                f"Aviso: {len(missing)} imagens não foram localizadas no diretório '{self.dataset_dir}'."
+            )
+        return df
 
     def update_font_size(self):
         """ Atualiza o tamanho da fonte de todos os widgets. """
@@ -355,18 +433,33 @@ class AlzheimerApp:
             return
 
         try:
-            self.dataframe = pd.read_csv(file_path, sep=';')
-            
-            # TODO: Pré-processar o CSV conforme item 9 [cite: 90]
-            # Exemplo:
-            # self.dataframe['Class'] = self.dataframe['Group'].apply(
-            #    lambda x: 'NonDemented' if x == 'Nondemented' or (x == 'Converted' and row['CDR'] == 0) else 'Demented'
-            # )
-            # Nota: O 'apply' com 'row' é complexo. Pode ser melhor fazer em etapas.
-            
-            self.lbl_csv_status.config(text=f"CSV Carregado: {os.path.basename(file_path)}", foreground="green")
-            self.log(f"CSV '{file_path}' carregado com {len(self.dataframe)} linhas.")
-            self.log(f"Colunas: {list(self.dataframe.columns)}")
+            df = pd.read_csv(file_path, sep=';')
+            original_rows = len(df)
+
+            df = self._normalize_numeric_columns(df)
+            df = self._add_target_class(df)
+            df = self._attach_image_paths(df)
+
+            self.dataframe = df.reset_index(drop=True)
+            self.csv_path = file_path
+
+            self.lbl_csv_status.config(
+                text=f"CSV Carregado: {os.path.basename(file_path)}",
+                foreground="green"
+            )
+
+            target_counts = self.dataframe['Target_Class'].value_counts().to_dict()
+            missing_images = int((~self.dataframe['ImageExists']).sum())
+
+            self.log(f"CSV '{file_path}' carregado com {original_rows} linhas.")
+            self.log(f"Linhas válidas após processamento: {len(self.dataframe)}")
+            self.log(f"Distribuição das classes (Target_Class): {target_counts}")
+            if missing_images:
+                self.log(
+                    f"{missing_images} entradas estão sem arquivo de imagem disponível."
+                )
+            else:
+                self.log("Todas as imagens referenciadas foram encontradas no diretório do dataset.")
         except Exception as e:
             messagebox.showerror("Erro ao Carregar CSV", f"Erro: {e}")
             self.log(f"Falha ao carregar CSV: {e}")
