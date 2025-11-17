@@ -65,19 +65,53 @@ class AlzheimerApp:
         self.dataframe = None  # Armazena o CSV
         self.image_path = None
         self.original_image = None # Imagem PIL original
-        self.processed_image = None # Imagem PIL processada (segmentada)
+        self.preprocessed_image = None # Imagem PIL pré-processada (com filtros)
+        self.segmented_image = None # Imagem PIL segmentada (com contorno)
         self.image_mask = None # Máscara (numpy) da segmentação
         self.features_df = None # DataFrame com características extraídas
+        self.current_filter = "none" # Filtro atual aplicado
         
         # --- Variáveis de Zoom ---
         self.zoom_level_original = 1.0
-        self.zoom_level_processed = 1.0
+        self.zoom_level_preprocessed = 1.0
+        self.zoom_level_segmented = 1.0
         self.pan_start_x_original = 0
         self.pan_start_y_original = 0
-        self.pan_start_x_processed = 0
-        self.pan_start_y_processed = 0
+        self.pan_start_x_preprocessed = 0
+        self.pan_start_y_preprocessed = 0
+        self.pan_start_x_segmented = 0
+        self.pan_start_y_segmented = 0
         self.is_panning_original = False
-        self.is_panning_processed = False
+        self.is_panning_preprocessed = False
+        self.is_panning_segmented = False
+        
+        # --- Variáveis de Region Growing ---
+        self.click_moved_original = False
+        self.click_moved_preprocessed = False
+        self.region_growing_threshold = 50  # FIXO: 50
+        self.use_histogram_equalization = True  # FIXO: CLAHE sempre ativado
+        self.use_otsu_for_segmentation = False  # Usar Otsu (binarizada) ou CLAHE (escala de cinza)
+        self.multi_seed_mode = False  # Modo de múltiplos seeds manual
+        self.accumulated_mask = None  # Máscara acumulada de múltiplos cliques
+        self.multi_seed_points = []  # Pontos coletados no modo multi-seed
+        
+        # --- Variáveis de Pós-processamento Morfológico (FIXAS) ---
+        self.morphology_kernel_size = 15  # FIXO: 15x15
+        self.apply_closing = True  # FIXO: Fechamento ativado
+        self.apply_fill_holes = True  # FIXO: Preencher buracos ativado
+        self.apply_opening = True  # FIXO: Abertura ativado (remover ruído)
+        self.apply_smooth_contours = True  # FIXO: Suavizar contornos ativado
+        
+        # --- Variáveis de medição de coordenadas ---
+        self.show_coordinates = True  # Mostrar coordenadas do mouse
+        self.current_mouse_x = 0
+        self.current_mouse_y = 0
+        
+        # --- Seed points FIXOS para segmentação automática ---
+        self.auto_seed_points = [
+            (164, 91),   # Ponto 1 - Ventrículo
+            (171, 114),  # Ponto 2 - Ventrículo
+        ]
         
         # Configura a fonte padrão
         self.default_font = font.nametofont("TkDefaultFont")
@@ -91,22 +125,48 @@ class AlzheimerApp:
         main_frame = ttk.Frame(root, padding="10")
         main_frame.pack(expand=True, fill=tk.BOTH)
         
-        # Frame de Exibição de Imagem (à esquerda)
-        image_frame = ttk.Frame(main_frame, relief=tk.RIDGE, padding="5")
-        image_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # Frame Superior: Grid de Imagens (2 colunas: imagens + controles)
+        images_and_controls_frame = ttk.Frame(main_frame)
+        images_and_controls_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         
-        self.lbl_image_original = ttk.Label(image_frame, text="Imagem Original")
-        self.lbl_image_original.pack(pady=5)
-        self.canvas_original = tk.Canvas(image_frame, bg="gray", width=400, height=400)
+        # Frame de Imagens (à esquerda)
+        images_container = ttk.Frame(images_and_controls_frame)
+        images_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Linha 1: Original + Preprocessed
+        row1_frame = ttk.Frame(images_container)
+        row1_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=2)
+        
+        # Canvas Original
+        original_frame = ttk.Frame(row1_frame, relief=tk.RIDGE, padding="2")
+        original_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+        self.lbl_image_original = ttk.Label(original_frame, text="📷 Imagem Original", font=("Arial", 10, "bold"))
+        self.lbl_image_original.pack(pady=2)
+        self.canvas_original = tk.Canvas(original_frame, bg="gray", width=300, height=300)
         self.canvas_original.pack(fill=tk.BOTH, expand=True)
         
-        self.lbl_image_processed = ttk.Label(image_frame, text="Imagem Processada (Segmentada)")
-        self.lbl_image_processed.pack(pady=5)
-        self.canvas_processed = tk.Canvas(image_frame, bg="gray", width=400, height=400)
-        self.canvas_processed.pack(fill=tk.BOTH, expand=True)
+        # Canvas Preprocessed
+        preprocessed_frame = ttk.Frame(row1_frame, relief=tk.RIDGE, padding="2")
+        preprocessed_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+        self.lbl_image_preprocessed = ttk.Label(preprocessed_frame, text="🔧 Pré-processada (Filtros)", font=("Arial", 10, "bold"))
+        self.lbl_image_preprocessed.pack(pady=2)
+        self.canvas_preprocessed = tk.Canvas(preprocessed_frame, bg="gray", width=300, height=300)
+        self.canvas_preprocessed.pack(fill=tk.BOTH, expand=True)
+        
+        # Linha 2: Segmented
+        row2_frame = ttk.Frame(images_container)
+        row2_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=2)
+        
+        # Canvas Segmented
+        segmented_frame = ttk.Frame(row2_frame, relief=tk.RIDGE, padding="2")
+        segmented_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+        self.lbl_image_segmented = ttk.Label(segmented_frame, text="✂️ Segmentada (Contorno Amarelo)", font=("Arial", 10, "bold"))
+        self.lbl_image_segmented.pack(pady=2)
+        self.canvas_segmented = tk.Canvas(segmented_frame, bg="gray", width=600, height=300)
+        self.canvas_segmented.pack(fill=tk.BOTH, expand=True)
         
         # Frame de Controle e Log (à direita)
-        control_frame = ttk.Frame(main_frame, width=300)
+        control_frame = ttk.Frame(images_and_controls_frame, width=280)
         control_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
         
         self.lbl_csv_status = ttk.Label(control_frame, text="CSV não carregado", foreground="red")
@@ -118,18 +178,126 @@ class AlzheimerApp:
         btn_load_image = ttk.Button(control_frame, text="Carregar Imagem", command=self.load_image)
         btn_load_image.pack(pady=5, fill=tk.X)
         
-        btn_reset_original = ttk.Button(control_frame, text="Reiniciar Zoom Orig.", command=lambda: self.reset_zoom("original"))
-        btn_reset_original.pack(pady=5, fill=tk.X)
-        
-        btn_reset_processed = ttk.Button(control_frame, text="Reiniciar Zoom Proc.", command=lambda: self.reset_zoom("processed"))
-        btn_reset_processed.pack(pady=5, fill=tk.X)
+        # Frame de botões de zoom em grid
+        zoom_frame = ttk.Frame(control_frame)
+        zoom_frame.pack(pady=5, fill=tk.X)
+        btn_reset_original = ttk.Button(zoom_frame, text="↻ Orig", command=lambda: self.reset_zoom("original"))
+        btn_reset_original.pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
+        btn_reset_preprocessed = ttk.Button(zoom_frame, text="↻ Prep", command=lambda: self.reset_zoom("preprocessed"))
+        btn_reset_preprocessed.pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
+        btn_reset_segmented = ttk.Button(zoom_frame, text="↻ Seg", command=lambda: self.reset_zoom("segmented"))
+        btn_reset_segmented.pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
         
         # Separador
         ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
         
-        # Botões de Processamento
-        btn_segment = ttk.Button(control_frame, text="1. Segmentar Ventrículos", command=self.segment_ventricles)
-        btn_segment.pack(pady=5, fill=tk.X)
+        # Seção de Pré-processamento (FIXO: Otsu + CLAHE)
+        ttk.Label(control_frame, text="🔧 Pré-processamento (FIXO):", font=("Arial", 9, "bold")).pack(pady=(5,0))
+        
+        btn_apply_otsu = ttk.Button(control_frame, text="Aplicar Otsu + CLAHE", command=lambda: self.apply_filter("otsu"))
+        btn_apply_otsu.pack(pady=5, fill=tk.X)
+        
+        self.lbl_current_filter = ttk.Label(control_frame, text="Pré-proc: Não aplicado", foreground="gray")
+        self.lbl_current_filter.pack(pady=2)
+        
+        # Separador
+        ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
+        
+        # Seção de Segmentação
+        ttk.Label(control_frame, text="✂️ Segmentação:", font=("Arial", 9, "bold")).pack(pady=(5,0))
+        
+        # Escolha de imagem para segmentação
+        ttk.Label(control_frame, text="Imagem para Region Growing:", foreground="blue").pack(pady=(5,0))
+        self.segmentation_mode = tk.StringVar(value="clahe")
+        
+        rb_frame = ttk.Frame(control_frame)
+        rb_frame.pack(pady=2, fill=tk.X)
+        
+        rb_clahe = ttk.Radiobutton(rb_frame, text="CLAHE (Escala Cinza)", 
+                                    variable=self.segmentation_mode, value="clahe")
+        rb_clahe.pack(anchor=tk.W, padx=20)
+        
+        rb_otsu = ttk.Radiobutton(rb_frame, text="Otsu (Binarizada)", 
+                                   variable=self.segmentation_mode, value="otsu")
+        rb_otsu.pack(anchor=tk.W, padx=20)
+        
+        ttk.Label(control_frame, text="Parâmetros FIXOS:", foreground="blue").pack(pady=(5,0))
+        ttk.Label(control_frame, text="• Threshold: 50", foreground="gray").pack(anchor=tk.W, padx=20)
+        ttk.Label(control_frame, text="• Kernel: 15x15", foreground="gray").pack(anchor=tk.W, padx=20)
+        ttk.Label(control_frame, text="• Morfologia: Completa", foreground="gray").pack(anchor=tk.W, padx=20)
+        
+        # Segmentação Automática
+        ttk.Label(control_frame, text="1. Automática (Seeds Fixos):", foreground="blue").pack(pady=(5,0))
+        ttk.Label(control_frame, text="• Seed 1: (164, 91)", foreground="gray").pack(anchor=tk.W, padx=20)
+        ttk.Label(control_frame, text="• Seed 2: (171, 114)", foreground="gray").pack(anchor=tk.W, padx=20)
+        
+        btn_segment_auto = ttk.Button(control_frame, text="▶ Segmentação Automática", command=self.segment_ventricles)
+        btn_segment_auto.pack(pady=5, fill=tk.X)
+        
+        # Segmentação Manual (Multi-Seed)
+        ttk.Label(control_frame, text="2. Manual (Multi-Seed):", foreground="blue").pack(pady=(5,0))
+        
+        multi_seed_buttons = ttk.Frame(control_frame)
+        multi_seed_buttons.pack(pady=5, fill=tk.X)
+        
+        btn_multi_start = ttk.Button(multi_seed_buttons, text="Iniciar Multi-Seed", command=self.start_multi_seed)
+        btn_multi_start.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        
+        btn_multi_finish = ttk.Button(multi_seed_buttons, text="Finalizar", command=self.finish_multi_seed)
+        btn_multi_finish.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        
+        self.lbl_multi_seed = ttk.Label(control_frame, text="", foreground="purple")
+        self.lbl_multi_seed.pack(pady=2)
+        
+        btn_export_multi_seeds = ttk.Button(control_frame, text="💾 Salvar Pontos Multi-Seed", 
+                                            command=self.export_multi_seed_points)
+        btn_export_multi_seeds.pack(pady=5, fill=tk.X)
+        
+        self.lbl_segment_status = ttk.Label(control_frame, text="", foreground="green")
+        self.lbl_segment_status.pack(pady=2)
+        
+        # Separador
+        ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
+        
+        # Seção de Coordenadas
+        ttk.Label(control_frame, text="📍 Coordenadas do Mouse:", font=("Arial", 9, "bold")).pack(pady=(5,0))
+        
+        self.lbl_mouse_coords = ttk.Label(control_frame, text="X: -- | Y: --", 
+                                          font=("Courier", 11), foreground="blue")
+        self.lbl_mouse_coords.pack(pady=5)
+        
+        ttk.Label(control_frame, text="Clique para registrar ponto:", foreground="gray").pack()
+        self.lbl_clicked_coords = ttk.Label(control_frame, text="Nenhum ponto registrado", 
+                                            font=("Courier", 9), foreground="green")
+        self.lbl_clicked_coords.pack(pady=2)
+        
+        points_buttons_frame = ttk.Frame(control_frame)
+        points_buttons_frame.pack(pady=5, fill=tk.X)
+        
+        btn_clear_points = ttk.Button(points_buttons_frame, text="Limpar", command=self.clear_registered_points)
+        btn_clear_points.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        
+        btn_export_points = ttk.Button(points_buttons_frame, text="Exportar", command=self.export_registered_points)
+        btn_export_points.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        
+        # Lista de pontos registrados
+        self.registered_points = []
+        
+        # Separador
+        ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
+        
+        # Seção de Processamento em Lote
+        ttk.Label(control_frame, text="📁 Processamento em Lote:", font=("Arial", 9, "bold")).pack(pady=(5,0))
+        
+        btn_batch = ttk.Button(control_frame, text="🔄 Segmentar Pasta Inteira (.nii)", 
+                               command=self.batch_segment_folder)
+        btn_batch.pack(pady=5, fill=tk.X)
+        
+        self.lbl_batch_status = ttk.Label(control_frame, text="", foreground="blue")
+        self.lbl_batch_status.pack(pady=2)
+        
+        # Separador
+        ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
         
         btn_extract = ttk.Button(control_frame, text="2. Extrair Características", command=self.extract_features)
         btn_extract.pack(pady=5, fill=tk.X)
@@ -204,6 +372,155 @@ class AlzheimerApp:
             self.update_font_size()
             self.log(f"Tamanho da fonte diminuído para {self.current_font_size}")
 
+
+    def track_mouse_position(self, event):
+        """Rastreia a posição do mouse na imagem original."""
+        if self.original_image is None:
+            return
+        
+        # Converte coordenadas do canvas para coordenadas da imagem
+        canvas_w = self.canvas_original.winfo_width()
+        canvas_h = self.canvas_original.winfo_height()
+        
+        img_w = self.original_image.width
+        img_h = self.original_image.height
+        
+        # Calcula o tamanho da imagem exibida considerando o zoom
+        display_w = int(img_w * self.zoom_level_original)
+        display_h = int(img_h * self.zoom_level_original)
+        
+        # Ajuste: centralização no canvas
+        offset_x = (canvas_w - display_w) / 2
+        offset_y = (canvas_h - display_h) / 2
+        
+        # Converte para coordenadas da imagem original
+        img_x = int((event.x - offset_x) / self.zoom_level_original)
+        img_y = int((event.y - offset_y) / self.zoom_level_original)
+        
+        # Verifica se está dentro da imagem
+        if 0 <= img_x < img_w and 0 <= img_y < img_h:
+            self.current_mouse_x = img_x
+            self.current_mouse_y = img_y
+            self.lbl_mouse_coords.config(text=f"X: {img_x:3d} | Y: {img_y:3d}")
+        else:
+            self.lbl_mouse_coords.config(text="X: -- | Y: --")
+
+    def track_mouse_position_preprocessed(self, event):
+        """Rastreia a posição do mouse na imagem pré-processada."""
+        if self.preprocessed_image is None:
+            return
+        
+        # Converte coordenadas do canvas para coordenadas da imagem
+        canvas_w = self.canvas_preprocessed.winfo_width()
+        canvas_h = self.canvas_preprocessed.winfo_height()
+        
+        img_w = self.preprocessed_image.width
+        img_h = self.preprocessed_image.height
+        
+        # Calcula o tamanho da imagem exibida considerando o zoom
+        display_w = int(img_w * self.zoom_level_preprocessed)
+        display_h = int(img_h * self.zoom_level_preprocessed)
+        
+        # Ajuste: centralização no canvas
+        offset_x = (canvas_w - display_w) / 2
+        offset_y = (canvas_h - display_h) / 2
+        
+        # Converte para coordenadas da imagem
+        img_x = int((event.x - offset_x) / self.zoom_level_preprocessed)
+        img_y = int((event.y - offset_y) / self.zoom_level_preprocessed)
+        
+        # Verifica se está dentro da imagem
+        if 0 <= img_x < img_w and 0 <= img_y < img_h:
+            self.lbl_mouse_coords.config(text=f"X: {img_x:3d} | Y: {img_y:3d} [PRÉ-PROC]")
+        else:
+            self.lbl_mouse_coords.config(text="X: -- | Y: --")
+
+    def clear_registered_points(self):
+        """Limpa a lista de pontos registrados."""
+        self.registered_points = []
+        self.lbl_clicked_coords.config(text="Nenhum ponto registrado")
+        self.log("📍 Pontos registrados limpos.")
+
+    def export_registered_points(self):
+        """Exporta os pontos registrados em formato Python para o log."""
+        if not self.registered_points:
+            self.log("⚠ Nenhum ponto registrado para exportar.")
+            return
+        
+        self.log("\n" + "="*50)
+        self.log("📍 PONTOS REGISTRADOS (formato Python):")
+        self.log("="*50)
+        self.log(f"# Total de pontos: {len(self.registered_points)}")
+        self.log(f"seed_points = [")
+        for i, (x, y) in enumerate(self.registered_points):
+            self.log(f"    ({x}, {y}),  # Ponto {i+1}")
+        self.log("]")
+        self.log("="*50 + "\n")
+        
+        messagebox.showinfo("Pontos Exportados", 
+                           f"{len(self.registered_points)} pontos exportados para o log!\n\n"
+                           "Copie do log para usar na segmentação automática.")
+
+    def start_multi_seed(self):
+        """Inicia o modo de múltiplos seeds manual."""
+        if self.original_image is None:
+            messagebox.showwarning("Aviso", "Carregue uma imagem primeiro.")
+            return
+        
+        self.multi_seed_mode = True
+        self.multi_seed_points = []
+        self.accumulated_mask = None
+        self.lbl_multi_seed.config(text="🎯 Multi-Seed ATIVO - Clique nos ventrículos", foreground="purple")
+        self.log("🎯 Modo Multi-Seed ativado. Clique em múltiplos pontos dos ventrículos.")
+
+    def finish_multi_seed(self):
+        """Finaliza o modo multi-seed e executa segmentação com os pontos coletados."""
+        if not self.multi_seed_mode:
+            messagebox.showwarning("Aviso", "Modo Multi-Seed não está ativo.")
+            return
+        
+        if not self.multi_seed_points:
+            messagebox.showwarning("Aviso", "Nenhum ponto coletado no modo Multi-Seed.")
+            self.multi_seed_mode = False
+            self.lbl_multi_seed.config(text="")
+            return
+        
+        self.multi_seed_mode = False
+        self.lbl_multi_seed.config(text=f"✓ Multi-Seed finalizado: {len(self.multi_seed_points)} pontos", 
+                                   foreground="green")
+        
+        # A máscara já foi acumulada durante os cliques
+        self.log(f"✓ Modo Multi-Seed finalizado com {len(self.multi_seed_points)} pontos.")
+        
+        # Atualiza status
+        if self.accumulated_mask is not None:
+            num_pixels = np.sum(self.accumulated_mask == 255)
+            self.lbl_segment_status.config(
+                text=f"✓ Multi-Seed: {len(self.multi_seed_points)} seeds | {num_pixels} pixels",
+                foreground="green"
+            )
+
+    def export_multi_seed_points(self):
+        """Exporta os pontos coletados no modo Multi-Seed."""
+        if not self.multi_seed_points:
+            self.log("⚠ Nenhum ponto Multi-Seed para exportar.")
+            messagebox.showwarning("Aviso", "Nenhum ponto Multi-Seed coletado.")
+            return
+        
+        self.log("\n" + "="*60)
+        self.log("🎯 PONTOS MULTI-SEED (formato Python):")
+        self.log("="*60)
+        self.log(f"# Total de pontos: {len(self.multi_seed_points)}")
+        self.log(f"auto_seed_points = [")
+        for i, (x, y) in enumerate(self.multi_seed_points):
+            self.log(f"    ({x}, {y}),  # Ponto {i+1}")
+        self.log("]")
+        self.log("="*60 + "\n")
+        
+        messagebox.showinfo("Pontos Multi-Seed Exportados", 
+                           f"{len(self.multi_seed_points)} pontos exportados para o log!\n\n"
+                           "Copie do log e cole em self.auto_seed_points no código.")
+
     # --- 3. FUNÇÕES DE CARREGAMENTO E EXIBIÇÃO ---
 
     def setup_bindings(self):
@@ -215,20 +532,32 @@ class AlzheimerApp:
         self.canvas_original.bind("<ButtonPress-1>", lambda e: self.start_pan(e, "original"))
         self.canvas_original.bind("<B1-Motion>", lambda e: self.pan_image(e, "original"))
         self.canvas_original.bind("<ButtonRelease-1>", lambda e: self.stop_pan(e, "original"))
+        self.canvas_original.bind("<Motion>", self.track_mouse_position)  # Rastrear posição do mouse
         
-        # Imagem processada
-        self.canvas_processed.bind("<MouseWheel>", lambda e: self.zoom_image(e, "processed"))
-        self.canvas_processed.bind("<Button-4>", lambda e: self.zoom_image(e, "processed"))
-        self.canvas_processed.bind("<Button-5>", lambda e: self.zoom_image(e, "processed"))
-        self.canvas_processed.bind("<ButtonPress-1>", lambda e: self.start_pan(e, "processed"))
-        self.canvas_processed.bind("<B1-Motion>", lambda e: self.pan_image(e, "processed"))
-        self.canvas_processed.bind("<ButtonRelease-1>", lambda e: self.stop_pan(e, "processed"))
+        # Imagem preprocessed
+        self.canvas_preprocessed.bind("<MouseWheel>", lambda e: self.zoom_image(e, "preprocessed"))
+        self.canvas_preprocessed.bind("<Button-4>", lambda e: self.zoom_image(e, "preprocessed"))
+        self.canvas_preprocessed.bind("<Button-5>", lambda e: self.zoom_image(e, "preprocessed"))
+        self.canvas_preprocessed.bind("<ButtonPress-1>", lambda e: self.start_pan(e, "preprocessed"))
+        self.canvas_preprocessed.bind("<B1-Motion>", lambda e: self.pan_image(e, "preprocessed"))
+        self.canvas_preprocessed.bind("<ButtonRelease-1>", lambda e: self.stop_pan(e, "preprocessed"))
+        self.canvas_preprocessed.bind("<Motion>", self.track_mouse_position_preprocessed)  # Rastrear posição
+        
+        # Imagem segmented
+        self.canvas_segmented.bind("<MouseWheel>", lambda e: self.zoom_image(e, "segmented"))
+        self.canvas_segmented.bind("<Button-4>", lambda e: self.zoom_image(e, "segmented"))
+        self.canvas_segmented.bind("<Button-5>", lambda e: self.zoom_image(e, "segmented"))
+        self.canvas_segmented.bind("<ButtonPress-1>", lambda e: self.start_pan(e, "segmented"))
+        self.canvas_segmented.bind("<B1-Motion>", lambda e: self.pan_image(e, "segmented"))
+        self.canvas_segmented.bind("<ButtonRelease-1>", lambda e: self.stop_pan(e, "segmented"))
 
     def zoom_image(self, event, canvas_type):
         """Controle de zoom"""
         if canvas_type == "original" and self.original_image is None:
             return
-        if canvas_type == "processed" and self.processed_image is None:
+        if canvas_type == "preprocessed" and self.preprocessed_image is None:
+            return
+        if canvas_type == "segmented" and self.segmented_image is None:
             return
         
         # Determinar a direção do zoom
@@ -242,19 +571,27 @@ class AlzheimerApp:
         # Atualizar nível do zoom
         if canvas_type == "original":
             self.zoom_level_original *= zoom_factor
-            self.zoom_level_original = max(0.1, min(5.0, self.zoom_level_original))  # Limit zoom
+            self.zoom_level_original = max(0.1, min(5.0, self.zoom_level_original))
             self.display_image_zoomed(
                 self.original_image, self.canvas_original, 
                 self.zoom_level_original,
                 "original",
             )
-        else:
-            self.zoom_level_processed *= zoom_factor
-            self.zoom_level_processed = max(0.1, min(5.0, self.zoom_level_processed))
+        elif canvas_type == "preprocessed":
+            self.zoom_level_preprocessed *= zoom_factor
+            self.zoom_level_preprocessed = max(0.1, min(5.0, self.zoom_level_preprocessed))
             self.display_image_zoomed(
-                self.processed_image, self.canvas_processed,
-                self.zoom_level_processed,
-                "processed",
+                self.preprocessed_image, self.canvas_preprocessed,
+                self.zoom_level_preprocessed,
+                "preprocessed",
+            )
+        else:  # segmented
+            self.zoom_level_segmented *= zoom_factor
+            self.zoom_level_segmented = max(0.1, min(5.0, self.zoom_level_segmented))
+            self.display_image_zoomed(
+                self.segmented_image, self.canvas_segmented,
+                self.zoom_level_segmented,
+                "segmented",
             )
 
     def display_image_zoomed(self, pil_image, canvas, zoom_level, canvas_type):
@@ -266,7 +603,7 @@ class AlzheimerApp:
         canvas_height = canvas.winfo_height()
         
         if canvas_width < 2 or canvas_height < 2:
-            canvas_width, canvas_height = 400, 400
+            canvas_width, canvas_height = 300, 300
         
         # Calcular novas dimensões com base no zoom
         new_width = int(pil_image.width * zoom_level)
@@ -279,9 +616,12 @@ class AlzheimerApp:
         if canvas_type == "original":
             self.tk_image_original = ImageTk.PhotoImage(img_resized)
             img_tk = self.tk_image_original
-        else:
-            self.tk_image_processed = ImageTk.PhotoImage(img_resized)
-            img_tk = self.tk_image_processed
+        elif canvas_type == "preprocessed":
+            self.tk_image_preprocessed = ImageTk.PhotoImage(img_resized)
+            img_tk = self.tk_image_preprocessed
+        else:  # segmented
+            self.tk_image_segmented = ImageTk.PhotoImage(img_resized)
+            img_tk = self.tk_image_segmented
         
         # Limpar e redesenhar
         canvas.delete("all")
@@ -296,12 +636,19 @@ class AlzheimerApp:
             self.is_panning_original = True
             self.pan_start_x_original = event.x
             self.pan_start_y_original = event.y
+            self.click_moved_original = False  # Reset flag de movimento
             self.canvas_original.config(cursor="fleur")
-        else:
-            self.is_panning_processed = True
-            self.pan_start_x_processed = event.x
-            self.pan_start_y_processed = event.y
-            self.canvas_processed.config(cursor="fleur")
+        elif canvas_type == "preprocessed":
+            self.is_panning_preprocessed = True
+            self.pan_start_x_preprocessed = event.x
+            self.pan_start_y_preprocessed = event.y
+            self.click_moved_preprocessed = False  # Reset flag de movimento
+            self.canvas_preprocessed.config(cursor="fleur")
+        else:  # segmented
+            self.is_panning_segmented = True
+            self.pan_start_x_segmented = event.x
+            self.pan_start_y_segmented = event.y
+            self.canvas_segmented.config(cursor="fleur")
 
     def pan_image(self, event, canvas_type):
         """Exibe imagem por enquanto é arrastado."""
@@ -310,6 +657,10 @@ class AlzheimerApp:
             dx = event.x - self.pan_start_x_original
             dy = event.y - self.pan_start_y_original
             
+            # Marca que houve movimento
+            if abs(dx) > 3 or abs(dy) > 3:
+                self.click_moved_original = True
+            
             # Move elementos do canvas
             self.canvas_original.move("all", dx, dy)
             
@@ -317,33 +668,60 @@ class AlzheimerApp:
             self.pan_start_x_original = event.x
             self.pan_start_y_original = event.y
             
-        elif canvas_type == "processed" and self.is_panning_processed:
-            dx = event.x - self.pan_start_x_processed
-            dy = event.y - self.pan_start_y_processed
+        elif canvas_type == "preprocessed" and self.is_panning_preprocessed:
+            dx = event.x - self.pan_start_x_preprocessed
+            dy = event.y - self.pan_start_y_preprocessed
             
-            self.canvas_processed.move("all", dx, dy)
-            self.pan_start_x_processed = event.x
-            self.pan_start_y_processed = event.y
+            # Marca que houve movimento
+            if abs(dx) > 3 or abs(dy) > 3:
+                self.click_moved_preprocessed = True
+            
+            self.canvas_preprocessed.move("all", dx, dy)
+            self.pan_start_x_preprocessed = event.x
+            self.pan_start_y_preprocessed = event.y
+            
+        elif canvas_type == "segmented" and self.is_panning_segmented:
+            dx = event.x - self.pan_start_x_segmented
+            dy = event.y - self.pan_start_y_segmented
+            
+            self.canvas_segmented.move("all", dx, dy)
+            self.pan_start_x_segmented = event.x
+            self.pan_start_y_segmented = event.y
 
     def stop_pan(self, event, canvas_type):
         """Parar operação de exibição"""
         if canvas_type == "original":
             self.is_panning_original = False
             self.canvas_original.config(cursor="")
-        else:
-            self.is_panning_processed = False
-            self.canvas_processed.config(cursor="")
+            
+            # Se não houve movimento, trata como clique de seed
+            if not self.click_moved_original:
+                self.on_click_seed(event)
+        elif canvas_type == "preprocessed":
+            self.is_panning_preprocessed = False
+            self.canvas_preprocessed.config(cursor="")
+            
+            # Se não houve movimento, trata como clique na pré-processada
+            if not self.click_moved_preprocessed:
+                self.on_click_seed_preprocessed(event)
+        else:  # segmented
+            self.is_panning_segmented = False
+            self.canvas_segmented.config(cursor="")
 
     def reset_zoom(self, canvas_type):
         """Reinicia zoom e display para default"""
         if canvas_type == "original":
             self.zoom_level_original = 1.0
             if self.original_image is not None:
-                self.display_image(self.original_image, self.canvas_original)
-        else:
-            self.zoom_level_processed = 1.0
-            if self.processed_image is not None:
-                self.display_image(self.processed_image, self.canvas_processed)
+                self.display_image(self.original_image, self.canvas_original, "original")
+        elif canvas_type == "preprocessed":
+            self.zoom_level_preprocessed = 1.0
+            if self.preprocessed_image is not None:
+                self.display_image(self.preprocessed_image, self.canvas_preprocessed, "preprocessed")
+        else:  # segmented
+            self.zoom_level_segmented = 1.0
+            if self.segmented_image is not None:
+                self.display_image(self.segmented_image, self.canvas_segmented, "segmented")
 
     def load_csv(self):
         """ Carrega o arquivo CSV de demografia. """
@@ -412,39 +790,48 @@ class AlzheimerApp:
                 self.original_image = Image.open(file_path).convert("L") # Converte para Grayscale
 
             # Exibir imagem original
-            self.display_image(self.original_image, self.canvas_original)
-            self.processed_image = None
+            self.display_image(self.original_image, self.canvas_original, "original")
+            self.preprocessed_image = None
+            self.segmented_image = None
             self.image_mask = None
-            self.canvas_processed.delete("all") # Limpa canvas processado
+            self.canvas_preprocessed.delete("all") # Limpa canvas preprocessed
+            self.canvas_segmented.delete("all") # Limpa canvas segmented
+            self.current_filter = "none"
+            self.lbl_current_filter.config(text="Filtro: Nenhum")
 
         except Exception as e:
             messagebox.showerror("Erro ao Carregar Imagem", f"Erro: {e}")
             self.log(f"Falha ao carregar imagem: {e}")
 
-    def display_image(self, pil_image, canvas):
+    def display_image(self, pil_image, canvas, canvas_type):
         """ Exibe uma imagem PIL em um canvas Tkinter, com zoom/redimensionamento. [cite: 76]"""
         # Reinicia zoom ao exibir uma nova imagem
-        if canvas == self.canvas_original:
+        if canvas_type == "original":
             self.zoom_level_original = 1.0
-        else:
-            self.zoom_level_processed = 1.0
+        elif canvas_type == "preprocessed":
+            self.zoom_level_preprocessed = 1.0
+        else:  # segmented
+            self.zoom_level_segmented = 1.0
         
         canvas_width = canvas.winfo_width()
         canvas_height = canvas.winfo_height()
         
         if canvas_width < 2 or canvas_height < 2: # Canvas não está pronto
-            canvas_width, canvas_height = 400, 400 # Valor padrão
+            canvas_width, canvas_height = 300, 300 # Valor padrão
 
         # Redimensiona a imagem para caber no canvas mantendo a proporção
         img_resized = ImageOps.contain(pil_image, (canvas_width, canvas_height))
 
         # Criar PhotoImage
-        if canvas == self.canvas_original:
+        if canvas_type == "original":
             self.tk_image_original = ImageTk.PhotoImage(img_resized)
             img_tk = self.tk_image_original
-        else:
-            self.tk_image_processed = ImageTk.PhotoImage(img_resized)
-            img_tk = self.tk_image_processed
+        elif canvas_type == "preprocessed":
+            self.tk_image_preprocessed = ImageTk.PhotoImage(img_resized)
+            img_tk = self.tk_image_preprocessed
+        else:  # segmented
+            self.tk_image_segmented = ImageTk.PhotoImage(img_resized)
+            img_tk = self.tk_image_segmented
         
         canvas.delete("all")
         canvas.create_image(
@@ -454,58 +841,645 @@ class AlzheimerApp:
 
     # --- 4. FUNÇÕES DE PROCESSAMENTO DE IMAGEM ---
 
+    def batch_segment_folder(self):
+        """Processa em lote todos os arquivos .nii de uma pasta."""
+        # Seleciona pasta de entrada
+        input_folder = filedialog.askdirectory(
+            title="Selecione a pasta com arquivos .nii (ENTRADA)"
+        )
+        if not input_folder:
+            return
+        
+        # Seleciona/cria pasta de saída
+        output_folder = filedialog.askdirectory(
+            title="Selecione a pasta para salvar resultados (SAÍDA)"
+        )
+        if not output_folder:
+            return
+        
+        # Lista todos os arquivos .nii
+        nii_files = [f for f in os.listdir(input_folder) if f.endswith('.nii') or f.endswith('.nii.gz')]
+        
+        if not nii_files:
+            messagebox.showwarning("Aviso", "Nenhum arquivo .nii encontrado na pasta!")
+            self.log("⚠ Nenhum arquivo .nii encontrado.")
+            return
+        
+        self.log("\n" + "="*70)
+        self.log("📁 PROCESSAMENTO EM LOTE - SEGMENTAÇÃO AUTOMÁTICA")
+        self.log("="*70)
+        self.log(f"Pasta de entrada: {input_folder}")
+        self.log(f"Pasta de saída: {output_folder}")
+        self.log(f"Total de arquivos .nii: {len(nii_files)}")
+        self.log("-"*70)
+        
+        # Confirmação
+        result = messagebox.askyesno(
+            "Confirmar Processamento em Lote",
+            f"Processar {len(nii_files)} arquivos .nii?\n\n"
+            f"Entrada: {input_folder}\n"
+            f"Saída: {output_folder}\n\n"
+            f"Parâmetros:\n"
+            f"• Seeds: {self.auto_seed_points}\n"
+            f"• Threshold: {self.region_growing_threshold}\n"
+            f"• Kernel: {self.morphology_kernel_size}x{self.morphology_kernel_size}"
+        )
+        
+        if not result:
+            self.log("❌ Processamento cancelado pelo usuário.\n")
+            return
+        
+        # Processa cada arquivo
+        success_count = 0
+        error_count = 0
+        
+        for idx, filename in enumerate(nii_files, 1):
+            try:
+                self.log(f"\n[{idx}/{len(nii_files)}] Processando: {filename}")
+                self.lbl_batch_status.config(
+                    text=f"Processando {idx}/{len(nii_files)}: {filename[:30]}...",
+                    foreground="blue"
+                )
+                self.root.update()  # Atualiza interface
+                
+                # Carrega arquivo .nii
+                file_path = os.path.join(input_folder, filename)
+                nii_img = nib.load(file_path)
+                img_data = nii_img.get_fdata()
+                
+                # Se for 3D, pega slice central (ou o método que você usa)
+                if len(img_data.shape) == 3:
+                    slice_idx = img_data.shape[1] // 2
+                    img_data = img_data[:, slice_idx, :]
+                
+                # Normaliza para 8 bits
+                img_data = (img_data - np.min(img_data)) / (np.max(img_data) - np.min(img_data))
+                img_data = (img_data * 255).astype(np.uint8)
+                
+                # Prepara imagem para segmentação (CLAHE ou Otsu)
+                img_for_segmentation = self.prepare_image_for_segmentation(img_data)
+                
+                # Segmentação Multi-Seed
+                combined_mask = None
+                for seed_x, seed_y in self.auto_seed_points:
+                    # Verifica limites
+                    if seed_x < 0 or seed_y < 0 or seed_x >= img_data.shape[1] or seed_y >= img_data.shape[0]:
+                        continue
+                    
+                    mask = self.region_growing(img_for_segmentation, (seed_x, seed_y), 
+                                              threshold=self.region_growing_threshold)
+                    
+                    if combined_mask is None:
+                        combined_mask = mask.copy()
+                    else:
+                        combined_mask = cv2.bitwise_or(combined_mask, mask)
+                
+                if combined_mask is None:
+                    self.log(f"   ⚠ Seeds fora dos limites! Pulando...")
+                    error_count += 1
+                    continue
+                
+                # Pós-processamento morfológico
+                final_mask = self.apply_morphological_postprocessing(combined_mask)
+                
+                # Cria imagem segmentada com contorno amarelo
+                img_with_contour = cv2.cvtColor(img_data, cv2.COLOR_GRAY2BGR)
+                contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 50]
+                cv2.drawContours(img_with_contour, large_contours, -1, (0, 255, 255), 2)
+                
+                # Salva os resultados
+                base_name = os.path.splitext(filename)[0]
+                if filename.endswith('.nii.gz'):
+                    base_name = base_name.replace('.nii', '')
+                
+                # Salva máscara binária
+                mask_filename = f"{base_name}_mask.png"
+                mask_path = os.path.join(output_folder, mask_filename)
+                cv2.imwrite(mask_path, final_mask)
+                
+                # Salva imagem segmentada com contorno
+                segmented_filename = f"{base_name}_segmented.png"
+                segmented_path = os.path.join(output_folder, segmented_filename)
+                cv2.imwrite(segmented_path, img_with_contour)
+                
+                num_pixels = np.sum(final_mask == 255)
+                self.log(f"   ✓ Segmentado: {len(large_contours)} região(ões), {num_pixels} pixels")
+                self.log(f"   ✓ Salvo: {mask_filename}")
+                self.log(f"   ✓ Salvo: {segmented_filename}")
+                
+                success_count += 1
+                
+            except Exception as e:
+                self.log(f"   ❌ ERRO: {str(e)}")
+                error_count += 1
+        
+        # Relatório final
+        self.log("-"*70)
+        self.log(f"✅ PROCESSAMENTO EM LOTE CONCLUÍDO!")
+        self.log(f"   • Total processado: {len(nii_files)}")
+        self.log(f"   • Sucessos: {success_count}")
+        self.log(f"   • Erros: {error_count}")
+        self.log(f"   • Pasta de saída: {output_folder}")
+        self.log("="*70 + "\n")
+        
+        self.lbl_batch_status.config(
+            text=f"✓ Concluído: {success_count}/{len(nii_files)} arquivos",
+            foreground="green"
+        )
+        
+        messagebox.showinfo(
+            "Processamento Concluído",
+            f"Processamento em lote finalizado!\n\n"
+            f"Total: {len(nii_files)} arquivos\n"
+            f"Sucessos: {success_count}\n"
+            f"Erros: {error_count}\n\n"
+            f"Resultados salvos em:\n{output_folder}"
+        )
+
+    def apply_filter(self, filter_name):
+        """Aplica filtro de pré-processamento na imagem original."""
+        if self.original_image is None:
+            messagebox.showwarning("Aviso", "Carregue uma imagem primeiro.")
+            return
+        
+        self.current_filter = filter_name
+        img_np = np.array(self.original_image)
+        
+        if filter_name == "none":
+            # Sem filtro: copia a original
+            filtered_img = img_np.copy()
+            self.lbl_current_filter.config(text="Filtro: Nenhum")
+            self.log("Filtro removido.")
+            
+        elif filter_name == "clahe":
+            # CLAHE - Equalização adaptativa de histograma
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            filtered_img = clahe.apply(img_np)
+            self.lbl_current_filter.config(text="Filtro: CLAHE")
+            self.log("Filtro CLAHE aplicado.")
+            
+        elif filter_name == "canny":
+            # Canny Edge Detection
+            # Primeiro aplica blur para reduzir ruído
+            blurred = cv2.GaussianBlur(img_np, (5, 5), 0)
+            filtered_img = cv2.Canny(blurred, threshold1=50, threshold2=150)
+            self.lbl_current_filter.config(text="Filtro: Canny")
+            self.log("Filtro Canny aplicado.")
+            
+        elif filter_name == "otsu":
+            # Aplica CLAHE primeiro
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            enhanced_img = clahe.apply(img_np)
+            
+            # Depois aplica Otsu Thresholding - binarização automática
+            _, filtered_img = cv2.threshold(enhanced_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            self.lbl_current_filter.config(text="Pré-proc: Otsu + CLAHE", foreground="green")
+            self.log("✓ Filtro Otsu + CLAHE aplicado.")
+            
+        else:
+            filtered_img = img_np.copy()
+        
+        # Converte para PIL e exibe no canvas preprocessed
+        self.preprocessed_image = Image.fromarray(filtered_img)
+        self.display_image(self.preprocessed_image, self.canvas_preprocessed, "preprocessed")
+
+    def on_click_seed_preprocessed(self, event):
+        """Captura clique na janela pré-processada e usa a imagem Otsu+CLAHE diretamente."""
+        if self.preprocessed_image is None:
+            messagebox.showwarning("Aviso", "Aplique 'Otsu + CLAHE' primeiro!")
+            self.log("⚠ Nenhuma imagem pré-processada disponível. Aplique um filtro primeiro.")
+            return
+
+        # Pega coordenadas do clique
+        x = event.x
+        y = event.y
+
+        # Converte coordenadas do canvas para coordenadas da imagem
+        canvas_w = self.canvas_preprocessed.winfo_width()
+        canvas_h = self.canvas_preprocessed.winfo_height()
+
+        img_w = self.preprocessed_image.width
+        img_h = self.preprocessed_image.height
+
+        # Calcula o tamanho da imagem exibida considerando o zoom
+        display_w = int(img_w * self.zoom_level_preprocessed)
+        display_h = int(img_h * self.zoom_level_preprocessed)
+
+        # Ajuste: centralização no canvas
+        offset_x = (canvas_w - display_w) / 2
+        offset_y = (canvas_h - display_h) / 2
+
+        # Converte para coordenadas da imagem
+        img_x = int((x - offset_x) / self.zoom_level_preprocessed)
+        img_y = int((y - offset_y) / self.zoom_level_preprocessed)
+
+        # Verifica se o clique está dentro da imagem
+        if img_x < 0 or img_y < 0 or img_x >= img_w or img_y >= img_h:
+            self.log("Clique fora da imagem pré-processada.")
+            return
+
+        self.log(f"🖼️ Clique na IMAGEM PRÉ-PROCESSADA detectado!")
+        self.log(f"📍 Coordenadas: ({img_x}, {img_y})")
+        self.log(f"🎯 Usando imagem Otsu+CLAHE diretamente para segmentação")
+        self.log(f"⚙️ Configuração: Threshold={self.region_growing_threshold}, Kernel={self.morphology_kernel_size}x{self.morphology_kernel_size}")
+        self.log(f"🔬 Morfologia: Abertura + Fechamento + Preenchimento + Suavização")
+        
+        # Converte a imagem pré-processada para numpy
+        img_preprocessed_np = np.array(self.preprocessed_image)
+        
+        # Pega a imagem original para visualização final
+        img_original_np = np.array(self.original_image)
+        
+        # Usa a imagem PRÉ-PROCESSADA diretamente para Region Growing
+        if self.multi_seed_mode:
+            self.multi_seed_points.append((img_x, img_y))
+            self.log(f"🎯 Multi-Seed {len(self.multi_seed_points)}: ({img_x}, {img_y})")
+            self.lbl_multi_seed.config(
+                text=f"🎯 Multi-Seed: {len(self.multi_seed_points)} ponto(s) - PRÉ-PROC",
+                foreground="purple"
+            )
+            
+            # Segmenta usando a imagem pré-processada
+            mask = self.region_growing(img_preprocessed_np, (img_x, img_y), 
+                                      threshold=self.region_growing_threshold)
+            
+            # Acumula máscaras
+            if self.accumulated_mask is None:
+                self.accumulated_mask = mask.copy()
+            else:
+                self.accumulated_mask = cv2.bitwise_or(self.accumulated_mask, mask)
+            
+            final_mask = self.apply_morphological_postprocessing(self.accumulated_mask)
+            self.image_mask = final_mask
+            
+            # Visualiza na imagem ORIGINAL
+            img_with_contour = cv2.cvtColor(img_original_np, cv2.COLOR_GRAY2BGR)
+            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 50]
+            cv2.drawContours(img_with_contour, large_contours, -1, (0, 255, 255), 2)
+            
+            self.segmented_image = Image.fromarray(img_with_contour)
+            self.display_image(self.segmented_image, self.canvas_segmented, "segmented")
+            
+            num_pixels = np.sum(final_mask == 255)
+            self.log(f"   ✓ Acumulado: {num_pixels} pixels totais\n")
+            
+        else:
+            # Modo normal: segmentação com um único seed usando imagem pré-processada
+            self.log(f"Aplicando Region Growing na imagem PRÉ-PROCESSADA...")
+            mask = self.region_growing(img_preprocessed_np, (img_x, img_y), 
+                                      threshold=self.region_growing_threshold)
+
+            # Aplica pós-processamento morfológico
+            self.log("Aplicando pós-processamento morfológico...")
+            final_mask = self.apply_morphological_postprocessing(mask)
+            self.image_mask = final_mask
+
+            # Visualiza na imagem ORIGINAL com contorno amarelo
+            img_with_contour = cv2.cvtColor(img_original_np, cv2.COLOR_GRAY2BGR)
+            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 50]
+            cv2.drawContours(img_with_contour, large_contours, -1, (0, 255, 255), 2)
+            
+            self.segmented_image = Image.fromarray(img_with_contour)
+            self.display_image(self.segmented_image, self.canvas_segmented, "segmented")
+
+            num_pixels = np.sum(final_mask == 255)
+            self.log(f"✓ Segmentação concluída. {len(large_contours)} região(ões) | {num_pixels} pixels")
+
+    def on_click_seed(self, event):
+        """Captura clique no canvas para selecionar seed point do region growing."""
+        if self.original_image is None:
+            return
+
+        # Pega coordenadas do clique
+        x = event.x
+        y = event.y
+
+        # Converte coordenadas do canvas para coordenadas da imagem
+        canvas_w = self.canvas_original.winfo_width()
+        canvas_h = self.canvas_original.winfo_height()
+
+        img_w = self.original_image.width
+        img_h = self.original_image.height
+
+        # Calcula o tamanho da imagem exibida considerando o zoom
+        display_w = int(img_w * self.zoom_level_original)
+        display_h = int(img_h * self.zoom_level_original)
+
+        # Ajuste: centralização no canvas
+        offset_x = (canvas_w - display_w) / 2
+        offset_y = (canvas_h - display_h) / 2
+
+        # Converte para coordenadas da imagem original
+        img_x = int((x - offset_x) / self.zoom_level_original)
+        img_y = int((y - offset_y) / self.zoom_level_original)
+
+        # Verifica se o clique está dentro da imagem
+        if img_x < 0 or img_y < 0 or img_x >= img_w or img_y >= img_h:
+            self.log("Clique fora da imagem.")
+            return
+
+        # Registra o ponto clicado (para rastreamento)
+        self.registered_points.append((img_x, img_y))
+        self.lbl_clicked_coords.config(text=f"Último: ({img_x}, {img_y}) | Total: {len(self.registered_points)}")
+        
+        self.log(f"📍 Ponto {len(self.registered_points)} registrado: X={img_x}, Y={img_y}")
+        
+        # Se está no modo Multi-Seed, apenas acumula pontos e máscaras
+        if self.multi_seed_mode:
+            self.multi_seed_points.append((img_x, img_y))
+            self.log(f"🎯 Multi-Seed {len(self.multi_seed_points)}: ({img_x}, {img_y})")
+            self.lbl_multi_seed.config(
+                text=f"🎯 Multi-Seed: {len(self.multi_seed_points)} ponto(s) coletado(s)",
+                foreground="purple"
+            )
+            
+            # Segmenta este ponto e acumula
+            img_np = np.array(self.original_image)
+            img_for_segmentation = self.prepare_image_for_segmentation(img_np)
+            
+            mask = self.region_growing(img_for_segmentation, (img_x, img_y), 
+                                      threshold=self.region_growing_threshold)
+            
+            # Acumula máscaras
+            if self.accumulated_mask is None:
+                self.accumulated_mask = mask.copy()
+            else:
+                self.accumulated_mask = cv2.bitwise_or(self.accumulated_mask, mask)
+            
+            # Aplica pós-processamento e visualiza
+            final_mask = self.apply_morphological_postprocessing(self.accumulated_mask)
+            self.image_mask = final_mask
+            
+            # Visualiza
+            img_with_contour = cv2.cvtColor(img_np, cv2.COLOR_GRAY2BGR)
+            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 50]
+            cv2.drawContours(img_with_contour, large_contours, -1, (0, 255, 255), 2)
+            
+            self.segmented_image = Image.fromarray(img_with_contour)
+            self.display_image(self.segmented_image, self.canvas_segmented, "segmented")
+            
+            num_pixels = np.sum(final_mask == 255)
+            self.log(f"   ✓ Acumulado: {num_pixels} pixels totais\n")
+            
+        else:
+            # Modo normal: segmentação com um único seed
+            self.log(f"🎯 Seed selecionado: ({img_x}, {img_y})")
+            
+            # Converte imagem PIL → numpy
+            img_np = np.array(self.original_image)
+            
+            # Prepara imagem para segmentação (CLAHE ou Otsu)
+            img_for_segmentation = self.prepare_image_for_segmentation(img_np)
+
+            # Aplica region growing
+            self.log(f"Aplicando Region Growing (threshold={self.region_growing_threshold})...")
+            mask = self.region_growing(img_for_segmentation, (img_x, img_y), threshold=self.region_growing_threshold)
+
+            # Aplica pós-processamento morfológico
+            self.log("Aplicando pós-processamento morfológico...")
+            final_mask = self.apply_morphological_postprocessing(mask)
+            
+            self.image_mask = final_mask
+
+            # Cria visualização: imagem original em RGB com contorno AMARELO
+            img_with_contour = cv2.cvtColor(img_np, cv2.COLOR_GRAY2BGR)
+            
+            # Encontra contornos na máscara final
+            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Filtra contornos pequenos (ruído)
+            min_area = 50
+            large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
+            
+            # Desenha contornos em AMARELO (BGR: 0, 255, 255)
+            cv2.drawContours(img_with_contour, large_contours, -1, (0, 255, 255), 2)
+            
+            # Converte para PIL e exibe no canvas segmented
+            self.segmented_image = Image.fromarray(img_with_contour)
+            self.display_image(self.segmented_image, self.canvas_segmented, "segmented")
+
+            num_pixels = np.sum(final_mask == 255)
+            self.log(f"✓ Region growing concluído. {len(large_contours)} região(ões) | {num_pixels} pixels segmentados")
+
+    def prepare_image_for_segmentation(self, img_np):
+        """
+        Prepara a imagem para segmentação baseado na escolha do usuário.
+        
+        Args:
+            img_np: numpy array 2D (grayscale)
+            
+        Returns:
+            img_processed: imagem processada (CLAHE ou Otsu)
+        """
+        mode = self.segmentation_mode.get()
+        
+        if mode == "otsu":
+            # Aplica CLAHE primeiro
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            enhanced_img = clahe.apply(img_np)
+            
+            # Depois aplica Otsu
+            _, img_processed = cv2.threshold(enhanced_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            self.log("   → Usando imagem OTSU (binarizada) para segmentação")
+            
+        else:  # "clahe"
+            # Apenas CLAHE
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            img_processed = clahe.apply(img_np)
+            self.log("   → Usando imagem CLAHE (escala de cinza) para segmentação")
+        
+        return img_processed
+
+    def region_growing(self, image, seed, threshold=10):
+        """
+        Algoritmo de Region Growing para segmentação.
+        
+        Args:
+            image: numpy array 2D (grayscale)
+            seed: (x, y) pixel inicial clicado
+            threshold: variação de intensidade permitida em relação ao seed
+            
+        Returns:
+            mask: numpy array 2D binário (0=fundo, 255=região)
+        """
+        h, w = image.shape
+        mask = np.zeros((h, w), dtype=np.uint8)
+
+        seed_x, seed_y = seed
+        seed_intensity = int(image[seed_y, seed_x])
+
+        queue = [(seed_x, seed_y)]
+        mask[seed_y, seed_x] = 255
+
+        # 8-connected neighbors
+        neighbors = [(-1, -1), (0, -1), (1, -1),
+                     (-1,  0),         (1,  0),
+                     (-1,  1), (0,  1), (1,  1)]
+
+        while queue:
+            x, y = queue.pop(0)
+
+            for dx, dy in neighbors:
+                nx, ny = x + dx, y + dy
+
+                if 0 <= nx < w and 0 <= ny < h:
+                    if mask[ny, nx] == 0:  # não visitado
+                        if abs(int(image[ny, nx]) - seed_intensity) < threshold:
+                            mask[ny, nx] = 255
+                            queue.append((nx, ny))
+
+        return mask
+
+    def apply_morphological_postprocessing(self, mask):
+        """
+        Aplica operações morfológicas para melhorar a máscara de segmentação.
+        
+        Args:
+            mask: numpy array 2D binário (0=fundo, 255=região)
+            
+        Returns:
+            processed_mask: numpy array 2D binário com operações morfológicas aplicadas
+        """
+        processed_mask = mask.copy()
+        
+        # Cria kernel morfológico
+        kernel_size = self.morphology_kernel_size
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        
+        # 1. Abertura (Opening) - Remove ruído pequeno
+        if self.apply_opening:
+            processed_mask = cv2.morphologyEx(processed_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+            self.log(f"   → Abertura aplicada (kernel {kernel_size}x{kernel_size})")
+        
+        # 2. Fechamento (Closing) - Fecha buracos pequenos
+        if self.apply_closing:
+            processed_mask = cv2.morphologyEx(processed_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+            self.log(f"   → Fechamento aplicado (kernel {kernel_size}x{kernel_size})")
+        
+        # 3. Preenchimento de buracos (Fill Holes)
+        if self.apply_fill_holes:
+            # Encontra contornos
+            contours, _ = cv2.findContours(processed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Preenche cada contorno
+            filled_mask = np.zeros_like(processed_mask)
+            for cnt in contours:
+                cv2.drawContours(filled_mask, [cnt], 0, 255, -1)  # -1 preenche o interior
+            
+            processed_mask = filled_mask
+            self.log(f"   → Buracos preenchidos ({len(contours)} regiões)")
+        
+        # 4. Suavização de contornos (Contour Smoothing)
+        if self.apply_smooth_contours:
+            # Encontra contornos
+            contours, _ = cv2.findContours(processed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Suaviza cada contorno usando aproximação poligonal
+            smoothed_mask = np.zeros_like(processed_mask)
+            for cnt in contours:
+                # Aproximação poligonal (epsilon = 0.5% do perímetro)
+                epsilon = 0.005 * cv2.arcLength(cnt, True)
+                smoothed_cnt = cv2.approxPolyDP(cnt, epsilon, True)
+                cv2.drawContours(smoothed_mask, [smoothed_cnt], 0, 255, -1)
+            
+            processed_mask = smoothed_mask
+            self.log(f"   → Contornos suavizados")
+        
+        return processed_mask
+
     def segment_ventricles(self):
-        """ Executa a segmentação dos ventrículos laterais. [cite: 78] """
+        """ Executa a segmentação AUTOMÁTICA dos ventrículos usando Region Growing com múltiplos seeds. """
         if self.original_image is None:
             messagebox.showwarning("Aviso", "Carregue uma imagem primeiro.")
             return
 
-        self.log("Iniciando segmentação dos ventrículos...")
+        self.log("="*60)
+        self.log("🔬 SEGMENTAÇÃO AUTOMÁTICA DOS VENTRÍCULOS")
+        self.log("="*60)
+        self.log(f"Método: Region Growing Multi-Seed")
+        self.log(f"Seeds fixos: {self.auto_seed_points}")
+        self.log(f"Threshold: {self.region_growing_threshold}")
+        self.log(f"Kernel morfológico: {self.morphology_kernel_size}x{self.morphology_kernel_size}")
+        self.log("-"*60)
 
         # Converte a imagem PIL para formato OpenCV (Numpy array)
-        img_cv = np.array(self.original_image)
+        img_np = np.array(self.original_image)
         
-        # --- TODO: LÓGICA DE SEGMENTAÇÃO ---
-        # Esta é a parte MAIS CRÍTICA do trabalho.
-        # O método abaixo é um PLACEHOLDER SIMPLES (Thresholding) e
-        # provavelmente NÃO dará bons resultados.
-        #
-        # O PDF diz "usando qualquer método"[cite: 78].
-        # Vocês devem pesquisar e implementar um método robusto, como:
-        # 1. Thresholding de Otsu + Operações Morfológicas (Abertura/Fechamento)
-        # 2. Region Growing (Crescimento de Regiões)
-        # 3. Active Contours (Contornos Ativos / "Snakes")
-        # 4. Watershed (Divisor de Águas)
-        
-        # Exemplo de Placeholder (Thresholding Simples):
-        # Ventrículos são escuros (fluido) em T1
-        _, mask = cv2.threshold(img_cv, 40, 255, cv2.THRESH_BINARY)
-        
-        # Aplicar operações morfológicas para limpar o ruído
-        kernel = np.ones((3,3), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        # Prepara imagem para segmentação (CLAHE ou Otsu baseado na escolha)
+        img_for_segmentation = self.prepare_image_for_segmentation(img_np)
 
-        # Salva a máscara
-        self.image_mask = mask # Este é o resultado binário (numpy)
+        # Aplica Region Growing em cada seed point e combina as máscaras
+        self.log(f"\n🎯 Aplicando Region Growing em {len(self.auto_seed_points)} seed points:")
+        combined_mask = None
         
-        # --- Fim do TODO de Segmentação ---
+        for i, (seed_x, seed_y) in enumerate(self.auto_seed_points, 1):
+            self.log(f"\n   Seed {i}/{len(self.auto_seed_points)}: ({seed_x}, {seed_y})")
+            
+            # Verifica se o seed está dentro da imagem
+            if seed_x < 0 or seed_y < 0 or seed_x >= img_np.shape[1] or seed_y >= img_np.shape[0]:
+                self.log(f"   ⚠ Seed fora dos limites da imagem! Ignorando...")
+                continue
+            
+            # Aplica region growing neste seed
+            mask = self.region_growing(img_for_segmentation, (seed_x, seed_y), 
+                                      threshold=self.region_growing_threshold)
+            
+            num_pixels = np.sum(mask == 255)
+            self.log(f"   ✓ {num_pixels} pixels segmentados")
+            
+            # Combina com a máscara acumulada
+            if combined_mask is None:
+                combined_mask = mask.copy()
+            else:
+                combined_mask = cv2.bitwise_or(combined_mask, mask)
 
-        # Cria uma imagem de visualização com o contorno (como na Fig. pag 4)
-        img_with_contours = cv2.cvtColor(img_cv, cv2.COLOR_GRAY2BGR)
-        contours, _ = cv2.findContours(self.image_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if combined_mask is None:
+            self.log("\n❌ Nenhum seed válido! Segmentação falhou.")
+            messagebox.showerror("Erro", "Nenhum seed point válido para segmentação.")
+            return
+
+        # Aplica pós-processamento morfológico
+        self.log("\n🔬 Aplicando pós-processamento morfológico:")
+        final_mask = self.apply_morphological_postprocessing(combined_mask)
+        
+        self.image_mask = final_mask
+
+        # Cria visualização: imagem original em RGB com contorno AMARELO
+        img_with_contour = cv2.cvtColor(img_np, cv2.COLOR_GRAY2BGR)
+        
+        # Encontra contornos na máscara final
+        contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         # Filtra contornos pequenos (ruído)
-        min_area = 100
+        min_area = 50
         large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
+        
+        # Desenha contornos em AMARELO (BGR: 0, 255, 255)
+        cv2.drawContours(img_with_contour, large_contours, -1, (0, 255, 255), 2)
+        
+        # Converte para PIL e exibe no canvas segmented
+        self.segmented_image = Image.fromarray(img_with_contour)
+        self.display_image(self.segmented_image, self.canvas_segmented, "segmented")
 
-        cv2.drawContours(img_with_contours, large_contours, -1, (0, 255, 0), 2) # Desenha em verde
+        num_pixels_final = np.sum(final_mask == 255)
+        total_area = sum([cv2.contourArea(cnt) for cnt in large_contours])
         
-        # Converte de volta para PIL e exibe
-        self.processed_image = Image.fromarray(img_with_contours)
-        self.display_image(self.processed_image, self.canvas_processed)
+        self.log("-"*60)
+        self.log(f"✅ SEGMENTAÇÃO CONCLUÍDA COM SUCESSO!")
+        self.log(f"   • Regiões encontradas: {len(large_contours)}")
+        self.log(f"   • Pixels segmentados: {num_pixels_final}")
+        self.log(f"   • Área total: {total_area:.2f} pixels²")
+        self.log("="*60 + "\n")
         
-        self.log(f"Segmentação concluída. {len(large_contours)} contornos encontrados.")
+        # Atualiza status na interface
+        self.lbl_segment_status.config(
+            text=f"✓ {len(large_contours)} região(ões) | {num_pixels_final} pixels",
+            foreground="green"
+        )
         
     def extract_features(self):
         """ Extrai as 6 características dos ventrículos segmentados. [cite: 79] """
