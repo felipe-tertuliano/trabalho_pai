@@ -109,14 +109,14 @@ No painel **Segmentação** existem duas opções (radiobutton):
   - Seeds pré-definidos: `(164, 91)` e `(171, 114)` (coordenadas no plano da imagem).  
   - Threshold do Region Growing: **50** (fixo).  
   - Kernel morfológico: **15×15**.  
-  - Morfologia: **Abertura + Fechamento + Preenchimento de buracos + Suavização de contornos**.
+  - Morfologia: **Abertura + Preenchimento de buracos + Suavização de contornos** (sem fechamento).
 
 Ao clicar em **“▶ Segmentação Automática”**:
 
 1. A imagem é preparada (CLAHE ou Otsu, conforme escolha).  
 2. O Region Growing é executado para cada seed.  
 3. As máscaras são combinadas (união).  
-4. É aplicado o pós‑processamento morfológico completo.  
+4. É aplicado o pós‑processamento morfológico (abertura, preenchimento de buracos e suavização – sem fechamento).  
 5. O resultado final (máscara) é salvo em `self.image_mask`.  
 6. A imagem original é convertida para RGB e os contornos da máscara são desenhados em **amarelo**.  
 7. O resultado é exibido em `Segmentada (Contorno Amarelo)` e um resumo aparece no log (nº de regiões, pixels, área).

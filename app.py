@@ -95,12 +95,12 @@ class AlzheimerApp:
         self.accumulated_mask = None  # Máscara acumulada de múltiplos cliques
         self.multi_seed_points = []  # Pontos coletados no modo multi-seed
         
-        # --- Variáveis de Pós-processamento Morfológico (FIXAS) ---
-        self.morphology_kernel_size = 15  # FIXO: 15x15
-        self.apply_closing = True  # FIXO: Fechamento ativado
-        self.apply_fill_holes = True  # FIXO: Preencher buracos ativado
-        self.apply_opening = True  # FIXO: Abertura ativado (remover ruído)
-        self.apply_smooth_contours = True  # FIXO: Suavizar contornos ativado
+        # --- Pós-processamento Morfológico (AJUSTÁVEL) ---
+        self.morphology_kernel_size = 15  # Ajustável via slider (3-25)
+        self.apply_closing = False  # Ajustável via checkbox
+        self.apply_fill_holes = True  # Ajustável via checkbox
+        self.apply_opening = True  # Ajustável via checkbox
+        self.apply_smooth_contours = True  # Ajustável via checkbox
         
         # --- Variáveis de medição de coordenadas ---
         self.show_coordinates = True  # Mostrar coordenadas do mouse
@@ -112,6 +112,23 @@ class AlzheimerApp:
             (164, 91),   # Ponto 1 - Ventrículo
             (171, 114),  # Ponto 2 - Ventrículo
         ]
+        
+        # --- Sistema de Pipeline de Filtros ---
+        self.filter_history = []  # Lista de filtros aplicados
+        self.original_image_backup = None  # Backup da imagem original
+        self.current_filtered_image = None  # Imagem com filtros aplicados
+        
+        # Parâmetros ajustáveis para cada filtro
+        self.filter_params = {
+            'clahe_clip_limit': 2.0,  # CLAHE: 0.5 - 10.0
+            'clahe_grid_size': 8,     # CLAHE: 4 - 16
+            'gaussian_kernel': 5,      # Gaussian: 3, 5, 7, 9, 11, 13, 15
+            'median_kernel': 5,        # Median: 3, 5, 7, 9, 11
+            'bilateral_d': 9,          # Bilateral: 5 - 15
+            'bilateral_sigma': 75,     # Bilateral: 10 - 150
+            'canny_low': 50,           # Canny: 0 - 255
+            'canny_high': 150,         # Canny: 0 - 255
+        }
         
         # Configura a fonte padrão
         self.default_font = font.nametofont("TkDefaultFont")
@@ -131,43 +148,73 @@ class AlzheimerApp:
         
         # Frame de Imagens (à esquerda)
         images_container = ttk.Frame(images_and_controls_frame)
-        images_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        images_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2, pady=2)
         
-        # Linha 1: Original + Preprocessed
-        row1_frame = ttk.Frame(images_container)
-        row1_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=2)
+        # LINHA 1: Original e Com Filtro lado a lado
+        top_row_frame = ttk.Frame(images_container)
+        top_row_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0,3))
         
-        # Canvas Original
-        original_frame = ttk.Frame(row1_frame, relief=tk.RIDGE, padding="2")
-        original_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
-        self.lbl_image_original = ttk.Label(original_frame, text="📷 Imagem Original", font=("Arial", 10, "bold"))
-        self.lbl_image_original.pack(pady=2)
-        self.canvas_original = tk.Canvas(original_frame, bg="gray", width=300, height=300)
+        # Canvas 1: Original (sem filtro)
+        original_frame = ttk.Frame(top_row_frame, relief=tk.RIDGE, padding="2")
+        original_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0,2))
+        self.lbl_image_original = ttk.Label(original_frame, text="📷 Original (Sem Filtro)", 
+                                            font=("Arial", 9, "bold"), foreground="blue")
+        self.lbl_image_original.pack(pady=1)
+        self.canvas_original = tk.Canvas(original_frame, bg="gray", width=280, height=250)
         self.canvas_original.pack(fill=tk.BOTH, expand=True)
         
-        # Canvas Preprocessed
-        preprocessed_frame = ttk.Frame(row1_frame, relief=tk.RIDGE, padding="2")
-        preprocessed_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
-        self.lbl_image_preprocessed = ttk.Label(preprocessed_frame, text="🔧 Pré-processada (Filtros)", font=("Arial", 10, "bold"))
-        self.lbl_image_preprocessed.pack(pady=2)
-        self.canvas_preprocessed = tk.Canvas(preprocessed_frame, bg="gray", width=300, height=300)
+        # Canvas 2: Com Filtro
+        preprocessed_frame = ttk.Frame(top_row_frame, relief=tk.RIDGE, padding="2")
+        preprocessed_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(2,0))
+        self.lbl_image_preprocessed = ttk.Label(preprocessed_frame, text="🔧 Com Filtro", 
+                                                font=("Arial", 9, "bold"), foreground="green")
+        self.lbl_image_preprocessed.pack(pady=1)
+        self.canvas_preprocessed = tk.Canvas(preprocessed_frame, bg="gray", width=280, height=250)
         self.canvas_preprocessed.pack(fill=tk.BOTH, expand=True)
         
-        # Linha 2: Segmented
-        row2_frame = ttk.Frame(images_container)
-        row2_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=2)
+        # LINHA 2: Segmentada (largura completa)
+        bottom_row_frame = ttk.Frame(images_container)
+        bottom_row_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(3,0))
         
-        # Canvas Segmented
-        segmented_frame = ttk.Frame(row2_frame, relief=tk.RIDGE, padding="2")
-        segmented_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
-        self.lbl_image_segmented = ttk.Label(segmented_frame, text="✂️ Segmentada (Contorno Amarelo)", font=("Arial", 10, "bold"))
-        self.lbl_image_segmented.pack(pady=2)
-        self.canvas_segmented = tk.Canvas(segmented_frame, bg="gray", width=600, height=300)
+        # Canvas 3: Com Filtro + Segmentada
+        segmented_frame = ttk.Frame(bottom_row_frame, relief=tk.RIDGE, padding="2")
+        segmented_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.lbl_image_segmented = ttk.Label(segmented_frame, text="✂️ Segmentada (Contorno Vermelho)", 
+                                             font=("Arial", 9, "bold"), foreground="red")
+        self.lbl_image_segmented.pack(pady=1)
+        self.canvas_segmented = tk.Canvas(segmented_frame, bg="gray", height=250)
         self.canvas_segmented.pack(fill=tk.BOTH, expand=True)
         
-        # Frame de Controle e Log (à direita)
-        control_frame = ttk.Frame(images_and_controls_frame, width=280)
-        control_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
+        # Frame de Controle e Log (à direita) com SCROLL
+        control_container = ttk.Frame(images_and_controls_frame, width=380)
+        control_container.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        control_container.pack_propagate(False)  # Força o tamanho fixo
+        
+        # Canvas para scroll
+        control_canvas = tk.Canvas(control_container, width=360)
+        scrollbar = ttk.Scrollbar(control_container, orient="vertical", command=control_canvas.yview)
+        
+        # Frame que vai conter todos os controles
+        control_frame = ttk.Frame(control_canvas)
+        
+        # Configuração do scroll
+        control_frame.bind(
+            "<Configure>",
+            lambda e: control_canvas.configure(scrollregion=control_canvas.bbox("all"))
+        )
+        
+        control_canvas.create_window((0, 0), window=control_frame, anchor="nw")
+        control_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack canvas e scrollbar
+        control_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Bind mouse wheel para scroll
+        def _on_mousewheel(event):
+            control_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        control_canvas.bind_all("<MouseWheel>", _on_mousewheel)
         
         self.lbl_csv_status = ttk.Label(control_frame, text="CSV não carregado", foreground="red")
         self.lbl_csv_status.pack(pady=5, fill=tk.X)
@@ -191,135 +238,381 @@ class AlzheimerApp:
         # Separador
         ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
         
-        # Seção de Pré-processamento (FIXO: Otsu + CLAHE)
-        ttk.Label(control_frame, text="🔧 Pré-processamento (FIXO):", font=("Arial", 9, "bold")).pack(pady=(5,0))
+        # ═══════════════════════════════════════════════════════════
+        # SEÇÃO 1: FILTROS DE PRÉ-PROCESSAMENTO
+        # ═══════════════════════════════════════════════════════════
         
-        btn_apply_otsu = ttk.Button(control_frame, text="Aplicar Otsu + CLAHE", command=lambda: self.apply_filter("otsu"))
-        btn_apply_otsu.pack(pady=5, fill=tk.X)
+        # Header clicável para expandir/colapsar
+        section1_header = ttk.Frame(control_frame)
+        section1_header.pack(fill=tk.X, pady=(5,0))
         
-        self.lbl_current_filter = ttk.Label(control_frame, text="Pré-proc: Não aplicado", foreground="gray")
+        self.section1_expanded = tk.BooleanVar(value=True)
+        self.btn_section1_toggle = ttk.Button(section1_header, text="▼", width=3,
+                                               command=lambda: self.toggle_section(1))
+        self.btn_section1_toggle.pack(side=tk.LEFT, padx=2)
+        
+        ttk.Label(section1_header, text="🔧 SEÇÃO 1: FILTROS", 
+                  font=("Arial", 11, "bold"), foreground="darkgreen").pack(side=tk.LEFT, padx=5)
+        
+        # Frame da seção 1 (expansível)
+        self.section1_frame = ttk.Frame(control_frame)
+        self.section1_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(self.section1_frame, text="Escolha o filtro a aplicar:", 
+                  foreground="blue", wraplength=340).pack(pady=(2,0), padx=5)
+        
+        # Variável para armazenar o filtro selecionado
+        self.filter_mode = tk.StringVar(value="otsu_clahe")
+        
+        # Opções de filtros
+        rb_filter_frame = ttk.Frame(self.section1_frame)
+        rb_filter_frame.pack(pady=5, fill=tk.X)
+        
+        ttk.Radiobutton(rb_filter_frame, text="Otsu + CLAHE", 
+                       variable=self.filter_mode, value="otsu_clahe").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="CLAHE (Equalização)", 
+                       variable=self.filter_mode, value="clahe").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="Otsu (Binarização)", 
+                       variable=self.filter_mode, value="otsu").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="Canny (Bordas)", 
+                       variable=self.filter_mode, value="canny").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="Gaussian Blur", 
+                       variable=self.filter_mode, value="gaussian").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="Median Filter", 
+                       variable=self.filter_mode, value="median").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="Bilateral Filter", 
+                       variable=self.filter_mode, value="bilateral").pack(anchor=tk.W, padx=20)
+        
+        # --- Parâmetros de Filtros ---
+        ttk.Label(self.section1_frame, text="⚙️ Parâmetros do Filtro:", foreground="blue").pack(pady=(10,2))
+        
+        # Frame com scroll para parâmetros
+        params_canvas = tk.Canvas(self.section1_frame, height=120, bg="white")
+        params_canvas.pack(fill=tk.X, pady=5)
+        
+        params_frame = ttk.Frame(params_canvas)
+        params_canvas.create_window((0, 0), window=params_frame, anchor=tk.NW)
+        
+        # CLAHE
+        ttk.Label(params_frame, text="CLAHE Clip Limit:", font=("Arial", 8)).grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_clahe_clip = ttk.Label(params_frame, text="2.0", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_clahe_clip.grid(row=0, column=1, padx=5)
+        self.slider_clahe_clip = ttk.Scale(params_frame, from_=0.5, to=10.0, orient=tk.HORIZONTAL, 
+                                           command=self.update_clahe_clip, length=150)
+        self.slider_clahe_clip.set(2.0)
+        self.slider_clahe_clip.grid(row=0, column=2, padx=5)
+        
+        ttk.Label(params_frame, text="CLAHE Grid Size:", font=("Arial", 8)).grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_clahe_grid = ttk.Label(params_frame, text="8", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_clahe_grid.grid(row=1, column=1, padx=5)
+        self.slider_clahe_grid = ttk.Scale(params_frame, from_=4, to=16, orient=tk.HORIZONTAL,
+                                           command=self.update_clahe_grid, length=150)
+        self.slider_clahe_grid.set(8)
+        self.slider_clahe_grid.grid(row=1, column=2, padx=5)
+        
+        # Gaussian
+        ttk.Label(params_frame, text="Gaussian Kernel:", font=("Arial", 8)).grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_gaussian = ttk.Label(params_frame, text="5", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_gaussian.grid(row=2, column=1, padx=5)
+        self.slider_gaussian = ttk.Scale(params_frame, from_=3, to=15, orient=tk.HORIZONTAL,
+                                        command=self.update_gaussian, length=150)
+        self.slider_gaussian.set(5)
+        self.slider_gaussian.grid(row=2, column=2, padx=5)
+        
+        # Median
+        ttk.Label(params_frame, text="Median Kernel:", font=("Arial", 8)).grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_median = ttk.Label(params_frame, text="5", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_median.grid(row=3, column=1, padx=5)
+        self.slider_median = ttk.Scale(params_frame, from_=3, to=15, orient=tk.HORIZONTAL,
+                                      command=self.update_median, length=150)
+        self.slider_median.set(5)
+        self.slider_median.grid(row=3, column=2, padx=5)
+        
+        # Canny
+        ttk.Label(params_frame, text="Canny Low:", font=("Arial", 8)).grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_canny_low = ttk.Label(params_frame, text="50", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_canny_low.grid(row=4, column=1, padx=5)
+        self.slider_canny_low = ttk.Scale(params_frame, from_=0, to=255, orient=tk.HORIZONTAL,
+                                         command=self.update_canny_low, length=150)
+        self.slider_canny_low.set(50)
+        self.slider_canny_low.grid(row=4, column=2, padx=5)
+        
+        ttk.Label(params_frame, text="Canny High:", font=("Arial", 8)).grid(row=5, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_canny_high = ttk.Label(params_frame, text="150", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_canny_high.grid(row=5, column=1, padx=5)
+        self.slider_canny_high = ttk.Scale(params_frame, from_=0, to=255, orient=tk.HORIZONTAL,
+                                          command=self.update_canny_high, length=150)
+        self.slider_canny_high.set(150)
+        self.slider_canny_high.grid(row=5, column=2, padx=5)
+        
+        # Bilateral
+        ttk.Label(params_frame, text="Bilateral d:", font=("Arial", 8)).grid(row=6, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_bilateral_d = ttk.Label(params_frame, text="9", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_bilateral_d.grid(row=6, column=1, padx=5)
+        self.slider_bilateral_d = ttk.Scale(params_frame, from_=5, to=15, orient=tk.HORIZONTAL,
+                                           command=self.update_bilateral_d, length=150)
+        self.slider_bilateral_d.set(9)
+        self.slider_bilateral_d.grid(row=6, column=2, padx=5)
+        
+        ttk.Label(params_frame, text="Bilateral Sigma:", font=("Arial", 8)).grid(row=7, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_bilateral_sigma = ttk.Label(params_frame, text="75", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_bilateral_sigma.grid(row=7, column=1, padx=5)
+        self.slider_bilateral_sigma = ttk.Scale(params_frame, from_=10, to=150, orient=tk.HORIZONTAL,
+                                               command=self.update_bilateral_sigma, length=150)
+        self.slider_bilateral_sigma.set(75)
+        self.slider_bilateral_sigma.grid(row=7, column=2, padx=5)
+        
+        # --- Botões de Filtros ---
+        filter_buttons = ttk.Frame(self.section1_frame)
+        filter_buttons.pack(pady=5, fill=tk.X)
+        
+        btn_apply_filter = ttk.Button(filter_buttons, text="✅ Aplicar Filtro", 
+                                      command=self.apply_selected_filter)
+        btn_apply_filter.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        
+        btn_reset_filters = ttk.Button(filter_buttons, text="↻ Reset", 
+                                       command=self.reset_filters)
+        btn_reset_filters.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        
+        # Histórico de filtros
+        ttk.Label(self.section1_frame, text="📜 Filtros Aplicados:", foreground="blue", font=("Arial", 8)).pack(pady=(5,0))
+        
+        self.lbl_filter_history = ttk.Label(self.section1_frame, text="Nenhum", 
+                                            foreground="gray", font=("Arial", 7), wraplength=340)
+        self.lbl_filter_history.pack(pady=2)
+        
+        self.lbl_current_filter = ttk.Label(self.section1_frame, text="Status: Original", 
+                                            foreground="green", font=("Arial", 8))
         self.lbl_current_filter.pack(pady=2)
         
         # Separador
         ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
         
-        # Seção de Segmentação
-        ttk.Label(control_frame, text="✂️ Segmentação:", font=("Arial", 9, "bold")).pack(pady=(5,0))
+        # ═══════════════════════════════════════════════════════════
+        # SEÇÃO 2: SEGMENTAÇÃO
+        # ═══════════════════════════════════════════════════════════
         
-        # Escolha de imagem para segmentação
-        ttk.Label(control_frame, text="Imagem para Region Growing:", foreground="blue").pack(pady=(5,0))
-        self.segmentation_mode = tk.StringVar(value="clahe")
+        # Header clicável
+        section2_header = ttk.Frame(control_frame)
+        section2_header.pack(fill=tk.X, pady=(5,0))
         
-        rb_frame = ttk.Frame(control_frame)
-        rb_frame.pack(pady=2, fill=tk.X)
+        self.section2_expanded = tk.BooleanVar(value=True)
+        self.btn_section2_toggle = ttk.Button(section2_header, text="▼", width=3,
+                                               command=lambda: self.toggle_section(2))
+        self.btn_section2_toggle.pack(side=tk.LEFT, padx=2)
         
-        rb_clahe = ttk.Radiobutton(rb_frame, text="CLAHE (Escala Cinza)", 
-                                    variable=self.segmentation_mode, value="clahe")
-        rb_clahe.pack(anchor=tk.W, padx=20)
+        ttk.Label(section2_header, text="✂️ SEÇÃO 2: SEGMENTAÇÃO", 
+                  font=("Arial", 11, "bold"), foreground="darkblue").pack(side=tk.LEFT, padx=5)
         
-        rb_otsu = ttk.Radiobutton(rb_frame, text="Otsu (Binarizada)", 
-                                   variable=self.segmentation_mode, value="otsu")
-        rb_otsu.pack(anchor=tk.W, padx=20)
+        # Frame da seção 2
+        self.section2_frame = ttk.Frame(control_frame)
+        self.section2_frame.pack(fill=tk.X, pady=5)
         
-        ttk.Label(control_frame, text="Parâmetros FIXOS:", foreground="blue").pack(pady=(5,0))
-        ttk.Label(control_frame, text="• Threshold: 50", foreground="gray").pack(anchor=tk.W, padx=20)
-        ttk.Label(control_frame, text="• Kernel: 15x15", foreground="gray").pack(anchor=tk.W, padx=20)
-        ttk.Label(control_frame, text="• Morfologia: Completa", foreground="gray").pack(anchor=tk.W, padx=20)
+        # Escolha de base para segmentação
+        ttk.Label(self.section2_frame, text="Base para Segmentação:", foreground="blue").pack(pady=(5,0))
+        self.segmentation_mode = tk.StringVar(value="filtered")
         
-        # Segmentação Automática
-        ttk.Label(control_frame, text="1. Automática (Seeds Fixos):", foreground="blue").pack(pady=(5,0))
-        ttk.Label(control_frame, text="• Seed 1: (164, 91)", foreground="gray").pack(anchor=tk.W, padx=20)
-        ttk.Label(control_frame, text="• Seed 2: (171, 114)", foreground="gray").pack(anchor=tk.W, padx=20)
+        rb_seg_frame = ttk.Frame(self.section2_frame)
+        rb_seg_frame.pack(pady=2, fill=tk.X)
         
-        btn_segment_auto = ttk.Button(control_frame, text="▶ Segmentação Automática", command=self.segment_ventricles)
-        btn_segment_auto.pack(pady=5, fill=tk.X)
+        ttk.Radiobutton(rb_seg_frame, text="Imagem Filtrada (da janela 2)", 
+                       variable=self.segmentation_mode, value="filtered").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_seg_frame, text="Imagem Original (sem filtro)", 
+                       variable=self.segmentation_mode, value="original").pack(anchor=tk.W, padx=20)
         
-        # Segmentação Manual (Multi-Seed)
-        ttk.Label(control_frame, text="2. Manual (Multi-Seed):", foreground="blue").pack(pady=(5,0))
+        ttk.Label(self.section2_frame, text="⚙️ Parâmetros de Segmentação:", foreground="blue", font=("Arial", 9, "bold")).pack(pady=(10,5))
         
-        multi_seed_buttons = ttk.Frame(control_frame)
-        multi_seed_buttons.pack(pady=5, fill=tk.X)
+        # Threshold do Region Growing
+        threshold_frame = ttk.Frame(self.section2_frame)
+        threshold_frame.pack(pady=5, fill=tk.X)
+        ttk.Label(threshold_frame, text="Threshold Region Growing:").pack(side=tk.LEFT)
+        self.lbl_threshold = ttk.Label(threshold_frame, text="50", foreground="red", font=("Arial", 9, "bold"))
+        self.lbl_threshold.pack(side=tk.LEFT, padx=5)
         
-        btn_multi_start = ttk.Button(multi_seed_buttons, text="Iniciar Multi-Seed", command=self.start_multi_seed)
-        btn_multi_start.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        self.slider_threshold = ttk.Scale(self.section2_frame, from_=10, to=100, orient=tk.HORIZONTAL,
+                                          command=self.update_threshold)
+        self.slider_threshold.set(50)
+        self.slider_threshold.pack(fill=tk.X, padx=10)
         
-        btn_multi_finish = ttk.Button(multi_seed_buttons, text="Finalizar", command=self.finish_multi_seed)
-        btn_multi_finish.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        # Kernel Morfológico
+        kernel_frame = ttk.Frame(self.section2_frame)
+        kernel_frame.pack(pady=5, fill=tk.X)
+        ttk.Label(kernel_frame, text="Kernel Morfológico:").pack(side=tk.LEFT)
+        self.lbl_kernel = ttk.Label(kernel_frame, text="15x15", foreground="red", font=("Arial", 9, "bold"))
+        self.lbl_kernel.pack(side=tk.LEFT, padx=5)
         
-        self.lbl_multi_seed = ttk.Label(control_frame, text="", foreground="purple")
+        self.slider_kernel = ttk.Scale(self.section2_frame, from_=3, to=25, orient=tk.HORIZONTAL,
+                                       command=self.update_kernel)
+        self.slider_kernel.set(15)
+        self.slider_kernel.pack(fill=tk.X, padx=10)
+        
+        # Operações Morfológicas
+        ttk.Label(self.section2_frame, text="Operações Morfológicas:", foreground="blue").pack(pady=(10,5))
+        
+        self.var_opening = tk.BooleanVar(value=True)
+        chk_opening = ttk.Checkbutton(self.section2_frame, text="🔹 Abertura (remover ruído)", 
+                                      variable=self.var_opening, command=self.update_morphology_flags)
+        chk_opening.pack(anchor=tk.W, padx=20)
+        
+        self.var_closing = tk.BooleanVar(value=False)
+        chk_closing = ttk.Checkbutton(self.section2_frame, text="🔹 Fechamento (fechar gaps)", 
+                                      variable=self.var_closing, command=self.update_morphology_flags)
+        chk_closing.pack(anchor=tk.W, padx=20)
+        
+        self.var_fill_holes = tk.BooleanVar(value=True)
+        chk_fill_holes = ttk.Checkbutton(self.section2_frame, text="🔹 Preencher buracos", 
+                                         variable=self.var_fill_holes, command=self.update_morphology_flags)
+        chk_fill_holes.pack(anchor=tk.W, padx=20)
+        
+        self.var_smooth = tk.BooleanVar(value=True)
+        chk_smooth = ttk.Checkbutton(self.section2_frame, text="🔹 Suavizar contornos", 
+                                     variable=self.var_smooth, command=self.update_morphology_flags)
+        chk_smooth.pack(anchor=tk.W, padx=20)
+        
+        ttk.Separator(self.section2_frame, orient='horizontal').pack(pady=10, fill=tk.X)
+        
+        # Opções de Segmentação
+        ttk.Label(self.section2_frame, text="Métodos de Segmentação:", foreground="blue", 
+                  font=("Arial", 9, "bold")).pack(pady=(5,5))
+        
+        # Método de segmentação
+        self.segmentation_method = tk.StringVar(value="region_growing")
+        
+        ttk.Radiobutton(self.section2_frame, text="🌱 Region Growing (clique para seed)", 
+                       variable=self.segmentation_method, value="region_growing").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(self.section2_frame, text="🎯 Watershed", 
+                       variable=self.segmentation_method, value="watershed").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(self.section2_frame, text="🔲 Thresholding Adaptativo", 
+                       variable=self.segmentation_method, value="adaptive_threshold").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(self.section2_frame, text="🧲 K-Means Clustering", 
+                       variable=self.segmentation_method, value="kmeans").pack(anchor=tk.W, padx=20)
+        
+        # Botões de Segmentação
+        ttk.Label(self.section2_frame, text="Executar Segmentação:", foreground="blue").pack(pady=(10,2))
+        
+        btn_segment_auto = ttk.Button(self.section2_frame, text="▶ Segmentação Automática (Seeds Fixos)", 
+                                      command=self.segment_ventricles)
+        btn_segment_auto.pack(pady=2, fill=tk.X)
+        
+        ttk.Label(self.section2_frame, text="Seeds Fixos: (164, 91), (171, 114)", 
+                  foreground="gray", font=("Arial", 7)).pack(pady=1)
+        
+        btn_multi_segment = ttk.Button(self.section2_frame, text="🖱️ Modo Multi-Seed (Clique nas Janelas)", 
+                                       command=self.toggle_multi_seed_mode)
+        btn_multi_segment.pack(pady=2, fill=tk.X)
+        
+        self.lbl_multi_seed = ttk.Label(self.section2_frame, text="Multi-Seed: Inativo", foreground="gray", 
+                                        font=("Arial", 8))
         self.lbl_multi_seed.pack(pady=2)
         
-        btn_export_multi_seeds = ttk.Button(control_frame, text="💾 Salvar Pontos Multi-Seed", 
-                                            command=self.export_multi_seed_points)
-        btn_export_multi_seeds.pack(pady=5, fill=tk.X)
-        
-        self.lbl_segment_status = ttk.Label(control_frame, text="", foreground="green")
+        self.lbl_segment_status = ttk.Label(self.section2_frame, text="Segmentação: Aguardando...", 
+                                            foreground="gray", font=("Arial", 8))
         self.lbl_segment_status.pack(pady=2)
         
         # Separador
         ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
         
-        # Seção de Coordenadas
-        ttk.Label(control_frame, text="📍 Coordenadas do Mouse:", font=("Arial", 9, "bold")).pack(pady=(5,0))
+        # ═══════════════════════════════════════════════════════════
+        # SEÇÃO 3: PROCESSAMENTO EM LOTE
+        # ═══════════════════════════════════════════════════════════
         
-        self.lbl_mouse_coords = ttk.Label(control_frame, text="X: -- | Y: --", 
-                                          font=("Courier", 11), foreground="blue")
-        self.lbl_mouse_coords.pack(pady=5)
+        # Header clicável
+        section3_header = ttk.Frame(control_frame)
+        section3_header.pack(fill=tk.X, pady=(5,0))
         
-        ttk.Label(control_frame, text="Clique para registrar ponto:", foreground="gray").pack()
-        self.lbl_clicked_coords = ttk.Label(control_frame, text="Nenhum ponto registrado", 
-                                            font=("Courier", 9), foreground="green")
-        self.lbl_clicked_coords.pack(pady=2)
+        self.section3_expanded = tk.BooleanVar(value=True)
+        self.btn_section3_toggle = ttk.Button(section3_header, text="▼", width=3,
+                                               command=lambda: self.toggle_section(3))
+        self.btn_section3_toggle.pack(side=tk.LEFT, padx=2)
         
-        points_buttons_frame = ttk.Frame(control_frame)
-        points_buttons_frame.pack(pady=5, fill=tk.X)
+        ttk.Label(section3_header, text="📁 SEÇÃO 3: LOTE", 
+                  font=("Arial", 11, "bold"), foreground="darkorange").pack(side=tk.LEFT, padx=5)
         
-        btn_clear_points = ttk.Button(points_buttons_frame, text="Limpar", command=self.clear_registered_points)
-        btn_clear_points.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        # Frame da seção 3
+        self.section3_frame = ttk.Frame(control_frame)
+        self.section3_frame.pack(fill=tk.X, pady=5)
         
-        btn_export_points = ttk.Button(points_buttons_frame, text="Exportar", command=self.export_registered_points)
-        btn_export_points.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        ttk.Label(self.section3_frame, text="Configurar Lote:", foreground="blue",
+                  font=("Arial", 9, "bold")).pack(pady=(5,2))
         
-        # Lista de pontos registrados
-        self.registered_points = []
+        btn_config_batch = ttk.Button(self.section3_frame, text="⚙️ Configurar Processamento em Lote", 
+                                      command=self.open_batch_config_window)
+        btn_config_batch.pack(pady=5, fill=tk.X)
         
-        # Separador
-        ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
+        btn_batch_simple = ttk.Button(self.section3_frame, text="🔄 Lote Rápido (Parâmetros Atuais)", 
+                                      command=self.batch_segment_folder)
+        btn_batch_simple.pack(pady=2, fill=tk.X)
         
-        # Seção de Processamento em Lote
-        ttk.Label(control_frame, text="📁 Processamento em Lote:", font=("Arial", 9, "bold")).pack(pady=(5,0))
-        
-        btn_batch = ttk.Button(control_frame, text="🔄 Segmentar Pasta Inteira (.nii)", 
-                               command=self.batch_segment_folder)
-        btn_batch.pack(pady=5, fill=tk.X)
-        
-        self.lbl_batch_status = ttk.Label(control_frame, text="", foreground="blue")
+        self.lbl_batch_status = ttk.Label(self.section3_frame, text="Lote: Aguardando...", 
+                                          foreground="gray", font=("Arial", 8))
         self.lbl_batch_status.pack(pady=2)
         
         # Separador
         ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
         
-        btn_extract = ttk.Button(control_frame, text="2. Extrair Características", command=self.extract_features)
-        btn_extract.pack(pady=5, fill=tk.X)
+        # ═══════════════════════════════════════════════════════════
+        # SEÇÃO 4: FEATURES E MACHINE LEARNING
+        # ═══════════════════════════════════════════════════════════
         
-        btn_scatterplot = ttk.Button(control_frame, text="3. Gerar Gráf. Dispersão", command=self.show_scatterplot)
-        btn_scatterplot.pack(pady=5, fill=tk.X)
+        # Header clicável
+        section4_header = ttk.Frame(control_frame)
+        section4_header.pack(fill=tk.X, pady=(5,0))
         
-        # Separador
-        ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
+        self.section4_expanded = tk.BooleanVar(value=True)
+        self.btn_section4_toggle = ttk.Button(section4_header, text="▼", width=3,
+                                               command=lambda: self.toggle_section(4))
+        self.btn_section4_toggle.pack(side=tk.LEFT, padx=2)
         
-        # Botões de Modelos
-        btn_class_shallow = ttk.Button(control_frame, text="Classif. Raso (XGBoost)", command=self.run_shallow_classifier)
-        btn_class_shallow.pack(pady=5, fill=tk.X)
+        ttk.Label(section4_header, text="🤖 SEÇÃO 4: FEATURES E ML", 
+                  font=("Arial", 11, "bold"), foreground="darkgreen").pack(side=tk.LEFT, padx=5)
         
-        btn_regr_shallow = ttk.Button(control_frame, text="Regressão Rasa (Linear)", command=self.run_shallow_regressor)
-        btn_regr_shallow.pack(pady=5, fill=tk.X)
+        # Frame da seção 4
+        self.section4_frame = ttk.Frame(control_frame)
+        self.section4_frame.pack(fill=tk.X, pady=5)
         
-        btn_class_deep = ttk.Button(control_frame, text="Classif. Profunda (ResNet50)", command=self.run_deep_classifier)
-        btn_class_deep.pack(pady=5, fill=tk.X)
+        # Sub-seção: Extração de Features
+        ttk.Label(self.section4_frame, text="📊 Extração de Características:", 
+                  foreground="blue", font=("Arial", 9, "bold")).pack(pady=(5,2))
         
-        btn_regr_deep = ttk.Button(control_frame, text="Regressão Profunda (ResNet50)", command=self.run_deep_regressor)
-        btn_regr_deep.pack(pady=5, fill=tk.X)
+        btn_extract = ttk.Button(self.section4_frame, text="🔬 Extrair Características", 
+                                command=self.extract_features)
+        btn_extract.pack(pady=2, fill=tk.X)
+        
+        btn_scatterplot = ttk.Button(self.section4_frame, text="📈 Gerar Gráfico de Dispersão", 
+                                     command=self.show_scatterplot)
+        btn_scatterplot.pack(pady=2, fill=tk.X)
+        
+        # Separador interno
+        ttk.Separator(self.section4_frame, orient='horizontal').pack(pady=8, fill=tk.X)
+        
+        # Sub-seção: Machine Learning
+        ttk.Label(self.section4_frame, text="🧠 Machine Learning:", 
+                  foreground="blue", font=("Arial", 9, "bold")).pack(pady=(2,5))
+        
+        # Frame para botões de ML em grid 2x2
+        ml_buttons_frame = ttk.Frame(self.section4_frame)
+        ml_buttons_frame.pack(pady=2, fill=tk.X, padx=5)
+        
+        # Configura as colunas para terem peso igual
+        ml_buttons_frame.columnconfigure(0, weight=1)
+        ml_buttons_frame.columnconfigure(1, weight=1)
+        
+        # Grid 2x2 de botões ML
+        btn_class_shallow = ttk.Button(ml_buttons_frame, text="📊 Classif. Raso\n(XGBoost)", 
+                                       command=self.run_shallow_classifier)
+        btn_class_shallow.grid(row=0, column=0, padx=2, pady=2, sticky="ew")
+        
+        btn_regr_shallow = ttk.Button(ml_buttons_frame, text="📉 Regressão Rasa\n(Linear)", 
+                                      command=self.run_shallow_regressor)
+        btn_regr_shallow.grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+        
+        btn_class_deep = ttk.Button(ml_buttons_frame, text="🧬 Classif. Profunda\n(ResNet50)", 
+                                    command=self.run_deep_classifier)
+        btn_class_deep.grid(row=1, column=0, padx=2, pady=2, sticky="ew")
+        
+        btn_regr_deep = ttk.Button(ml_buttons_frame, text="🔬 Regressão Profunda\n(ResNet50)", 
+                                   command=self.run_deep_regressor)
+        btn_regr_deep.grid(row=1, column=1, padx=2, pady=2, sticky="ew")
         
         # Log
         self.log_text = tk.Text(control_frame, height=10, state=tk.DISABLED)
@@ -550,6 +843,112 @@ class AlzheimerApp:
         self.canvas_segmented.bind("<ButtonPress-1>", lambda e: self.start_pan(e, "segmented"))
         self.canvas_segmented.bind("<B1-Motion>", lambda e: self.pan_image(e, "segmented"))
         self.canvas_segmented.bind("<ButtonRelease-1>", lambda e: self.stop_pan(e, "segmented"))
+
+    def toggle_section(self, section_num):
+        """Expande/colapsa uma seção."""
+        if section_num == 1:
+            if self.section1_expanded.get():
+                self.section1_frame.pack_forget()
+                self.btn_section1_toggle.config(text="▶")
+                self.section1_expanded.set(False)
+            else:
+                # Reinsere antes do separador da seção 2
+                self.section1_frame.pack(fill=tk.X, pady=5)
+                self.btn_section1_toggle.config(text="▼")
+                self.section1_expanded.set(True)
+        
+        elif section_num == 2:
+            if self.section2_expanded.get():
+                self.section2_frame.pack_forget()
+                self.btn_section2_toggle.config(text="▶")
+                self.section2_expanded.set(False)
+            else:
+                self.section2_frame.pack(fill=tk.X, pady=5)
+                self.btn_section2_toggle.config(text="▼")
+                self.section2_expanded.set(True)
+        
+        elif section_num == 3:
+            if self.section3_expanded.get():
+                self.section3_frame.pack_forget()
+                self.btn_section3_toggle.config(text="▶")
+                self.section3_expanded.set(False)
+            else:
+                self.section3_frame.pack(fill=tk.X, pady=5)
+                self.btn_section3_toggle.config(text="▼")
+                self.section3_expanded.set(True)
+        
+        elif section_num == 4:
+            if self.section4_expanded.get():
+                self.section4_frame.pack_forget()
+                self.btn_section4_toggle.config(text="▶")
+                self.section4_expanded.set(False)
+            else:
+                self.section4_frame.pack(fill=tk.X, pady=5)
+                self.btn_section4_toggle.config(text="▼")
+                self.section4_expanded.set(True)
+    
+    def update_threshold(self, value):
+        """Atualiza o threshold do region growing"""
+        self.region_growing_threshold = int(float(value))
+        self.lbl_threshold.config(text=str(self.region_growing_threshold))
+    
+    def update_kernel(self, value):
+        """Atualiza o tamanho do kernel morfológico"""
+        kernel_size = int(float(value))
+        if kernel_size % 2 == 0:  # Garantir que seja ímpar
+            kernel_size += 1
+        self.morphology_kernel_size = kernel_size
+        self.lbl_kernel.config(text=f"{kernel_size}x{kernel_size}")
+    
+    def update_morphology_flags(self):
+        """Atualiza as flags de operações morfológicas"""
+        self.apply_opening = self.var_opening.get()
+        self.apply_closing = self.var_closing.get()
+        self.apply_fill_holes = self.var_fill_holes.get()
+        self.apply_smooth_contours = self.var_smooth.get()
+    
+    # --- Métodos de Atualização de Parâmetros de Filtros ---
+    
+    def update_clahe_clip(self, value):
+        self.filter_params['clahe_clip_limit'] = float(value)
+        self.lbl_clahe_clip.config(text=f"{float(value):.1f}")
+    
+    def update_clahe_grid(self, value):
+        grid_size = int(float(value))
+        self.filter_params['clahe_grid_size'] = grid_size
+        self.lbl_clahe_grid.config(text=str(grid_size))
+    
+    def update_gaussian(self, value):
+        kernel = int(float(value))
+        if kernel % 2 == 0:
+            kernel += 1
+        self.filter_params['gaussian_kernel'] = kernel
+        self.lbl_gaussian.config(text=str(kernel))
+    
+    def update_median(self, value):
+        kernel = int(float(value))
+        if kernel % 2 == 0:
+            kernel += 1
+        self.filter_params['median_kernel'] = kernel
+        self.lbl_median.config(text=str(kernel))
+    
+    def update_canny_low(self, value):
+        self.filter_params['canny_low'] = int(float(value))
+        self.lbl_canny_low.config(text=str(int(float(value))))
+    
+    def update_canny_high(self, value):
+        self.filter_params['canny_high'] = int(float(value))
+        self.lbl_canny_high.config(text=str(int(float(value))))
+    
+    def update_bilateral_d(self, value):
+        d = int(float(value))
+        self.filter_params['bilateral_d'] = d
+        self.lbl_bilateral_d.config(text=str(d))
+    
+    def update_bilateral_sigma(self, value):
+        sigma = int(float(value))
+        self.filter_params['bilateral_sigma'] = sigma
+        self.lbl_bilateral_sigma.config(text=str(sigma))
 
     def zoom_image(self, event, canvas_type):
         """Controle de zoom"""
@@ -791,13 +1190,22 @@ class AlzheimerApp:
 
             # Exibir imagem original
             self.display_image(self.original_image, self.canvas_original, "original")
+            
+            # Reseta sistema de filtros
             self.preprocessed_image = None
             self.segmented_image = None
             self.image_mask = None
-            self.canvas_preprocessed.delete("all") # Limpa canvas preprocessed
-            self.canvas_segmented.delete("all") # Limpa canvas segmented
-            self.current_filter = "none"
-            self.lbl_current_filter.config(text="Filtro: Nenhum")
+            self.filter_history = []
+            self.original_image_backup = None
+            self.current_filtered_image = None
+            
+            # Limpa canvas
+            self.canvas_preprocessed.delete("all")
+            self.canvas_segmented.delete("all")
+            
+            # Atualiza labels
+            self.lbl_current_filter.config(text="Status: Nova imagem carregada", foreground="green")
+            self.lbl_filter_history.config(text="Nenhum", foreground="gray")
 
         except Exception as e:
             messagebox.showerror("Erro ao Carregar Imagem", f"Erro: {e}")
@@ -840,6 +1248,651 @@ class AlzheimerApp:
         )
 
     # --- 4. FUNÇÕES DE PROCESSAMENTO DE IMAGEM ---
+
+    def apply_selected_filter(self):
+        """
+        Aplica o filtro selecionado SOBRE a imagem atual (empilha filtros).
+        Se for o primeiro filtro, usa a imagem original.
+        """
+        if self.original_image is None:
+            messagebox.showwarning("Aviso", "Por favor, carregue uma imagem primeiro.")
+            return
+        
+        # Backup da imagem original na primeira aplicação
+        if self.original_image_backup is None:
+            self.original_image_backup = self.original_image.copy()
+        
+        # Define a imagem base: se já tem filtros, usa a filtrada; senão, usa a original
+        if self.current_filtered_image is not None:
+            base_image = self.current_filtered_image
+        else:
+            base_image = self.original_image
+        
+        filter_type = self.filter_mode.get()
+        params = self.filter_params
+        
+        self.log(f"\n🔧 Aplicando filtro: {filter_type.upper()}")
+        self.log(f"   Base: {'Imagem filtrada anterior' if self.current_filtered_image else 'Imagem original'}")
+        
+        # Converte para numpy
+        img_np = np.array(base_image.convert('L'))
+        
+        # Aplica o filtro selecionado COM PARÂMETROS
+        if filter_type == "otsu_clahe":
+            # CLAHE primeiro
+            clahe = cv2.createCLAHE(
+                clipLimit=params['clahe_clip_limit'], 
+                tileGridSize=(params['clahe_grid_size'], params['clahe_grid_size'])
+            )
+            img_filtered = clahe.apply(img_np)
+            # Depois Otsu
+            _, img_filtered = cv2.threshold(img_filtered, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            filter_name = f"Otsu+CLAHE(clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']})"
+            self.log(f"   ✓ Params: clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']}")
+            
+        elif filter_type == "clahe":
+            clahe = cv2.createCLAHE(
+                clipLimit=params['clahe_clip_limit'], 
+                tileGridSize=(params['clahe_grid_size'], params['clahe_grid_size'])
+            )
+            img_filtered = clahe.apply(img_np)
+            filter_name = f"CLAHE(clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']})"
+            self.log(f"   ✓ Params: clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']}")
+            
+        elif filter_type == "otsu":
+            _, img_filtered = cv2.threshold(img_np, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            filter_name = "Otsu"
+            self.log("   ✓ Binarização automática")
+            
+        elif filter_type == "canny":
+            img_filtered = cv2.Canny(img_np, params['canny_low'], params['canny_high'])
+            filter_name = f"Canny(low={params['canny_low']}, high={params['canny_high']})"
+            self.log(f"   ✓ Params: low={params['canny_low']}, high={params['canny_high']}")
+            
+        elif filter_type == "gaussian":
+            k = params['gaussian_kernel']
+            img_filtered = cv2.GaussianBlur(img_np, (k, k), 0)
+            filter_name = f"Gaussian(k={k})"
+            self.log(f"   ✓ Params: kernel={k}x{k}")
+            
+        elif filter_type == "median":
+            k = params['median_kernel']
+            img_filtered = cv2.medianBlur(img_np, k)
+            filter_name = f"Median(k={k})"
+            self.log(f"   ✓ Params: kernel={k}x{k}")
+            
+        elif filter_type == "bilateral":
+            d = params['bilateral_d']
+            sigma = params['bilateral_sigma']
+            img_filtered = cv2.bilateralFilter(img_np, d, sigma, sigma)
+            filter_name = f"Bilateral(d={d}, σ={sigma})"
+            self.log(f"   ✓ Params: d={d}, sigma={sigma}")
+        
+        else:
+            self.log(f"   ⚠ Filtro desconhecido: {filter_type}")
+            return
+        
+        # Adiciona ao histórico
+        self.filter_history.append(filter_name)
+        
+        # Armazena como imagem filtrada atual
+        self.current_filtered_image = Image.fromarray(img_filtered)
+        self.preprocessed_image = self.current_filtered_image
+        
+        # Exibe na janela 2
+        self.display_image(self.preprocessed_image, self.canvas_preprocessed, "preprocessed")
+        
+        # Atualiza labels
+        history_text = " → ".join(self.filter_history)
+        self.lbl_filter_history.config(text=history_text, foreground="purple")
+        
+        self.lbl_current_filter.config(
+            text=f"Status: {len(self.filter_history)} filtro(s) aplicado(s)",
+            foreground="green"
+        )
+        
+        self.log(f"✅ Filtro aplicado! Total de filtros: {len(self.filter_history)}")
+        self.log(f"   Pipeline: {history_text}\n")
+    
+    def reset_filters(self):
+        """Reseta todos os filtros e volta para a imagem original."""
+        if self.original_image_backup is None:
+            messagebox.showinfo("Info", "Nenhum filtro foi aplicado ainda.")
+            return
+        
+        self.log("\n↻ RESET DE FILTROS")
+        self.log(f"   Removendo {len(self.filter_history)} filtro(s)")
+        
+        # Limpa histórico e estado
+        self.filter_history = []
+        self.current_filtered_image = None
+        
+        # Restaura imagem original na janela 2
+        self.preprocessed_image = self.original_image_backup.copy()
+        self.display_image(self.preprocessed_image, self.canvas_preprocessed, "preprocessed")
+        
+        # Atualiza labels
+        self.lbl_filter_history.config(text="Nenhum (resetado)", foreground="gray")
+        self.lbl_current_filter.config(text="Status: Original (sem filtros)", foreground="green")
+        
+        self.log("✅ Filtros resetados! Imagem original restaurada.\n")
+        messagebox.showinfo("Reset", "Todos os filtros foram removidos!\nImagem original restaurada.")
+
+    def toggle_multi_seed_mode(self):
+        """Alterna o modo multi-seed ligado/desligado."""
+        self.multi_seed_mode = not self.multi_seed_mode
+        
+        if self.multi_seed_mode:
+            self.accumulated_mask = None
+            self.multi_seed_points = []
+            self.lbl_multi_seed.config(
+                text="Multi-Seed: 🟢 ATIVO (Clique nas janelas para adicionar seeds)",
+                foreground="green"
+            )
+            self.log("\n🟢 Modo Multi-Seed ATIVADO - Clique nas janelas para adicionar seeds")
+        else:
+            self.lbl_multi_seed.config(
+                text="Multi-Seed: 🔴 INATIVO",
+                foreground="gray"
+            )
+            self.log("🔴 Modo Multi-Seed DESATIVADO\n")
+    
+    def open_batch_config_window(self):
+        """Abre janela de configuração avançada para processamento em lote."""
+        config_window = tk.Toplevel(self.root)
+        config_window.title("⚙️ Configuração de Processamento em Lote")
+        config_window.geometry("700x800")
+        config_window.resizable(True, True)
+        
+        # Frame principal com scroll
+        main_frame = ttk.Frame(config_window, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Título
+        title_label = ttk.Label(main_frame, text="🔧 Configuração Avançada de Lote", 
+                                font=("Arial", 14, "bold"), foreground="darkblue")
+        title_label.pack(pady=10)
+        
+        # ═══════════════════════════════════════════════════════════
+        # SEÇÃO 1: FILTROS PARA APLICAR
+        # ═══════════════════════════════════════════════════════════
+        filter_frame = ttk.LabelFrame(main_frame, text="🎨 1. FILTROS A APLICAR (Pipeline)", padding="10")
+        filter_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Label(filter_frame, text="Selecione os filtros e configure parâmetros:", 
+                  foreground="blue").pack(anchor=tk.W, pady=(0,5))
+        
+        # Lista de filtros selecionados
+        self.batch_filters = []  # [(tipo, params), ...]
+        
+        # Frame de seleção de filtros
+        filter_select_frame = ttk.Frame(filter_frame)
+        filter_select_frame.pack(fill=tk.X, pady=5)
+        
+        self.batch_filter_var = tk.StringVar(value="clahe")
+        
+        filter_options = [
+            ("CLAHE", "clahe"),
+            ("Gaussian Blur", "gaussian"),
+            ("Median Filter", "median"),
+            ("Bilateral Filter", "bilateral"),
+            ("Canny", "canny"),
+            ("Otsu", "otsu"),
+            ("Otsu + CLAHE", "otsu_clahe")
+        ]
+        
+        ttk.Label(filter_select_frame, text="Filtro:").pack(side=tk.LEFT, padx=5)
+        filter_combo = ttk.Combobox(filter_select_frame, textvariable=self.batch_filter_var, 
+                                    values=[f[0] for f in filter_options], width=20, state="readonly")
+        filter_combo.pack(side=tk.LEFT, padx=5)
+        
+        btn_add_filter = ttk.Button(filter_select_frame, text="➕ Adicionar Filtro", 
+                                    command=lambda: self.add_filter_to_batch(config_window))
+        btn_add_filter.pack(side=tk.LEFT, padx=5)
+        
+        # Lista de filtros adicionados
+        ttk.Label(filter_frame, text="Pipeline de Filtros:", foreground="blue").pack(anchor=tk.W, pady=(10,2))
+        
+        self.batch_filter_list = tk.Listbox(filter_frame, height=4, font=("Courier", 9))
+        self.batch_filter_list.pack(fill=tk.X, pady=5)
+        
+        btn_clear_filters = ttk.Button(filter_frame, text="🗑️ Limpar Filtros", 
+                                       command=self.clear_batch_filters)
+        btn_clear_filters.pack(pady=2)
+        
+        # ═══════════════════════════════════════════════════════════
+        # SEÇÃO 2: SEED POINTS
+        # ═══════════════════════════════════════════════════════════
+        seed_frame = ttk.LabelFrame(main_frame, text="📍 2. SEED POINTS", padding="10")
+        seed_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Label(seed_frame, text="Configure os pontos de seed para region growing:", 
+                  foreground="blue").pack(anchor=tk.W, pady=(0,5))
+        
+        # Entry para adicionar seeds
+        seed_entry_frame = ttk.Frame(seed_frame)
+        seed_entry_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(seed_entry_frame, text="X:").pack(side=tk.LEFT, padx=2)
+        self.batch_seed_x = ttk.Entry(seed_entry_frame, width=8)
+        self.batch_seed_x.pack(side=tk.LEFT, padx=2)
+        self.batch_seed_x.insert(0, "164")
+        
+        ttk.Label(seed_entry_frame, text="Y:").pack(side=tk.LEFT, padx=2)
+        self.batch_seed_y = ttk.Entry(seed_entry_frame, width=8)
+        self.batch_seed_y.pack(side=tk.LEFT, padx=2)
+        self.batch_seed_y.insert(0, "91")
+        
+        btn_add_seed = ttk.Button(seed_entry_frame, text="➕ Adicionar Seed", 
+                                  command=self.add_seed_to_batch)
+        btn_add_seed.pack(side=tk.LEFT, padx=5)
+        
+        # Lista de seeds
+        self.batch_seed_list = tk.Listbox(seed_frame, height=3, font=("Courier", 9))
+        self.batch_seed_list.pack(fill=tk.X, pady=5)
+        
+        # Seeds padrão
+        self.batch_seeds = [(164, 91), (171, 114)]
+        self.update_seed_list()
+        
+        btn_clear_seeds = ttk.Button(seed_frame, text="🗑️ Limpar Seeds", 
+                                     command=self.clear_batch_seeds)
+        btn_clear_seeds.pack(pady=2)
+        
+        # ═══════════════════════════════════════════════════════════
+        # SEÇÃO 3: PARÂMETROS DE SEGMENTAÇÃO
+        # ═══════════════════════════════════════════════════════════
+        seg_frame = ttk.LabelFrame(main_frame, text="⚙️ 3. PARÂMETROS DE SEGMENTAÇÃO", padding="10")
+        seg_frame.pack(fill=tk.X, pady=10)
+        
+        # Threshold
+        threshold_frame = ttk.Frame(seg_frame)
+        threshold_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(threshold_frame, text="Threshold:").pack(side=tk.LEFT, padx=5)
+        self.batch_threshold_var = tk.IntVar(value=self.region_growing_threshold)
+        self.batch_lbl_threshold = ttk.Label(threshold_frame, text=str(self.region_growing_threshold), 
+                                             foreground="red", font=("Arial", 10, "bold"))
+        self.batch_lbl_threshold.pack(side=tk.LEFT, padx=5)
+        
+        batch_threshold_slider = ttk.Scale(seg_frame, from_=10, to=100, orient=tk.HORIZONTAL,
+                                          command=lambda v: self.update_batch_threshold(v))
+        batch_threshold_slider.set(self.region_growing_threshold)
+        batch_threshold_slider.pack(fill=tk.X, padx=5)
+        
+        # Kernel
+        kernel_frame = ttk.Frame(seg_frame)
+        kernel_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(kernel_frame, text="Kernel Morfológico:").pack(side=tk.LEFT, padx=5)
+        self.batch_kernel_var = tk.IntVar(value=self.morphology_kernel_size)
+        self.batch_lbl_kernel = ttk.Label(kernel_frame, text=f"{self.morphology_kernel_size}x{self.morphology_kernel_size}", 
+                                          foreground="red", font=("Arial", 10, "bold"))
+        self.batch_lbl_kernel.pack(side=tk.LEFT, padx=5)
+        
+        batch_kernel_slider = ttk.Scale(seg_frame, from_=3, to=25, orient=tk.HORIZONTAL,
+                                       command=lambda v: self.update_batch_kernel(v))
+        batch_kernel_slider.set(self.morphology_kernel_size)
+        batch_kernel_slider.pack(fill=tk.X, padx=5)
+        
+        # Morfologia
+        ttk.Label(seg_frame, text="Operações Morfológicas:", foreground="blue").pack(anchor=tk.W, pady=(10,5))
+        
+        self.batch_var_opening = tk.BooleanVar(value=self.apply_opening)
+        ttk.Checkbutton(seg_frame, text="Abertura (remover ruído)", 
+                       variable=self.batch_var_opening).pack(anchor=tk.W, padx=20)
+        
+        self.batch_var_closing = tk.BooleanVar(value=self.apply_closing)
+        ttk.Checkbutton(seg_frame, text="Fechamento (fechar gaps)", 
+                       variable=self.batch_var_closing).pack(anchor=tk.W, padx=20)
+        
+        self.batch_var_fill_holes = tk.BooleanVar(value=self.apply_fill_holes)
+        ttk.Checkbutton(seg_frame, text="Preencher buracos", 
+                       variable=self.batch_var_fill_holes).pack(anchor=tk.W, padx=20)
+        
+        self.batch_var_smooth = tk.BooleanVar(value=self.apply_smooth_contours)
+        ttk.Checkbutton(seg_frame, text="Suavizar contornos", 
+                       variable=self.batch_var_smooth).pack(anchor=tk.W, padx=20)
+        
+        # ═══════════════════════════════════════════════════════════
+        # BOTÃO FINAL
+        # ═══════════════════════════════════════════════════════════
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=20)
+        
+        btn_execute = ttk.Button(btn_frame, text="▶️ EXECUTAR PROCESSAMENTO EM LOTE", 
+                                command=lambda: self.execute_batch_with_config(config_window))
+        btn_execute.pack(side=tk.LEFT, padx=5)
+        
+        btn_cancel = ttk.Button(btn_frame, text="❌ Cancelar", 
+                               command=config_window.destroy)
+        btn_cancel.pack(side=tk.LEFT, padx=5)
+        
+        # Status
+        self.batch_config_status = ttk.Label(main_frame, text="", foreground="blue", font=("Arial", 9))
+        self.batch_config_status.pack(pady=5)
+    
+    def add_filter_to_batch(self, window):
+        """Adiciona um filtro à lista de filtros do lote."""
+        filter_type = self.batch_filter_var.get().lower().replace(" ", "_")
+        
+        # Captura parâmetros atuais do filtro
+        params = self.filter_params.copy()
+        
+        filter_info = {
+            'type': filter_type,
+            'params': params
+        }
+        
+        self.batch_filters.append(filter_info)
+        
+        # Atualiza lista visual
+        filter_names = {
+            "clahe": f"CLAHE(clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']})",
+            "gaussian": f"Gaussian(k={params['gaussian_kernel']})",
+            "median": f"Median(k={params['median_kernel']})",
+            "bilateral": f"Bilateral(d={params['bilateral_d']}, σ={params['bilateral_sigma']})",
+            "canny": f"Canny(low={params['canny_low']}, high={params['canny_high']})",
+            "otsu": "Otsu",
+            "otsu_clahe": f"Otsu+CLAHE(clip={params['clahe_clip_limit']:.1f})"
+        }
+        
+        display_name = filter_names.get(filter_type, filter_type)
+        self.batch_filter_list.insert(tk.END, f"{len(self.batch_filters)}. {display_name}")
+        
+        messagebox.showinfo("Filtro Adicionado", 
+                           f"Filtro '{display_name}' adicionado ao pipeline!\n\n"
+                           f"Total de filtros: {len(self.batch_filters)}")
+    
+    def clear_batch_filters(self):
+        """Limpa todos os filtros do lote."""
+        self.batch_filters = []
+        self.batch_filter_list.delete(0, tk.END)
+        messagebox.showinfo("Filtros Limpos", "Todos os filtros foram removidos do pipeline!")
+    
+    def add_seed_to_batch(self):
+        """Adiciona um seed point à lista."""
+        try:
+            x = int(self.batch_seed_x.get())
+            y = int(self.batch_seed_y.get())
+            self.batch_seeds.append((x, y))
+            self.update_seed_list()
+            messagebox.showinfo("Seed Adicionado", f"Seed ({x}, {y}) adicionado!\n\nTotal: {len(self.batch_seeds)}")
+        except ValueError:
+            messagebox.showerror("Erro", "Digite valores numéricos válidos para X e Y!")
+    
+    def clear_batch_seeds(self):
+        """Limpa todos os seeds."""
+        self.batch_seeds = []
+        self.update_seed_list()
+        messagebox.showinfo("Seeds Limpos", "Todos os seeds foram removidos!")
+    
+    def update_seed_list(self):
+        """Atualiza a lista visual de seeds."""
+        self.batch_seed_list.delete(0, tk.END)
+        for i, (x, y) in enumerate(self.batch_seeds, 1):
+            self.batch_seed_list.insert(tk.END, f"{i}. Seed ({x}, {y})")
+    
+    def update_batch_threshold(self, value):
+        """Atualiza threshold do lote."""
+        threshold = int(float(value))
+        self.batch_threshold_var.set(threshold)
+        self.batch_lbl_threshold.config(text=str(threshold))
+    
+    def update_batch_kernel(self, value):
+        """Atualiza kernel do lote."""
+        kernel = int(float(value))
+        if kernel % 2 == 0:
+            kernel += 1
+        self.batch_kernel_var.set(kernel)
+        self.batch_lbl_kernel.config(text=f"{kernel}x{kernel}")
+    
+    def execute_batch_with_config(self, config_window):
+        """Executa o processamento em lote com as configurações personalizadas."""
+        # Validações
+        if not self.batch_seeds:
+            messagebox.showerror("Erro", "Adicione pelo menos um seed point!")
+            return
+        
+        # Seleciona pastas
+        input_folder = filedialog.askdirectory(title="Selecione a pasta com arquivos .nii (ENTRADA)")
+        if not input_folder:
+            return
+        
+        output_folder = filedialog.askdirectory(title="Selecione a pasta para salvar resultados (SAÍDA)")
+        if not output_folder:
+            return
+        
+        # Fecha janela de configuração
+        config_window.destroy()
+        
+        # Lista arquivos
+        nii_files = [f for f in os.listdir(input_folder) if f.endswith('.nii') or f.endswith('.nii.gz')]
+        
+        if not nii_files:
+            messagebox.showwarning("Aviso", "Nenhum arquivo .nii encontrado na pasta!")
+            return
+        
+        # Confirmação
+        filter_pipeline = " → ".join([f['type'] for f in self.batch_filters]) if self.batch_filters else "Nenhum"
+        
+        result = messagebox.askyesno(
+            "Confirmar Processamento em Lote",
+            f"Processar {len(nii_files)} arquivos .nii?\n\n"
+            f"📂 Entrada: {input_folder}\n"
+            f"📂 Saída: {output_folder}\n\n"
+            f"🎨 Filtros: {len(self.batch_filters)}\n"
+            f"   {filter_pipeline}\n\n"
+            f"📍 Seeds: {len(self.batch_seeds)}\n"
+            f"   {self.batch_seeds}\n\n"
+            f"⚙️ Threshold: {self.batch_threshold_var.get()}\n"
+            f"⚙️ Kernel: {self.batch_kernel_var.get()}x{self.batch_kernel_var.get()}"
+        )
+        
+        if not result:
+            return
+        
+        # Executa processamento
+        self.run_custom_batch_processing(input_folder, output_folder, nii_files)
+
+    def run_custom_batch_processing(self, input_folder, output_folder, nii_files):
+        """Executa o processamento em lote com configurações personalizadas."""
+        self.log("\n" + "="*80)
+        self.log("📁 PROCESSAMENTO EM LOTE - CONFIGURAÇÃO PERSONALIZADA")
+        self.log("="*80)
+        self.log(f"Pasta de entrada: {input_folder}")
+        self.log(f"Pasta de saída: {output_folder}")
+        self.log(f"Total de arquivos: {len(nii_files)}")
+        self.log(f"Pipeline de filtros: {len(self.batch_filters)}")
+        for i, f in enumerate(self.batch_filters, 1):
+            self.log(f"   {i}. {f['type']}")
+        self.log(f"Seeds: {self.batch_seeds}")
+        self.log(f"Threshold: {self.batch_threshold_var.get()}")
+        self.log(f"Kernel: {self.batch_kernel_var.get()}x{self.batch_kernel_var.get()}")
+        self.log("-"*80)
+        
+        success_count = 0
+        error_count = 0
+        
+        for idx, filename in enumerate(nii_files, 1):
+            try:
+                self.log(f"\n[{idx}/{len(nii_files)}] Processando: {filename}")
+                self.lbl_batch_status.config(
+                    text=f"Processando {idx}/{len(nii_files)}: {filename[:30]}...",
+                    foreground="blue"
+                )
+                self.root.update()
+                
+                # Carrega arquivo .nii
+                file_path = os.path.join(input_folder, filename)
+                nii_img = nib.load(file_path)
+                img_data = nii_img.get_fdata()
+                
+                # Se for 3D, pega slice central
+                if len(img_data.shape) == 3:
+                    slice_idx = img_data.shape[1] // 2
+                    img_data = img_data[:, slice_idx, :]
+                
+                # Normaliza para 8 bits
+                img_data = (img_data - np.min(img_data)) / (np.max(img_data) - np.min(img_data))
+                img_data = (img_data * 255).astype(np.uint8)
+                
+                # APLICA PIPELINE DE FILTROS
+                processed_img = img_data.copy()
+                
+                for filter_info in self.batch_filters:
+                    filter_type = filter_info['type']
+                    params = filter_info['params']
+                    
+                    self.log(f"   🔧 Aplicando filtro: {filter_type}")
+                    
+                    if filter_type == "clahe":
+                        clahe = cv2.createCLAHE(
+                            clipLimit=params['clahe_clip_limit'],
+                            tileGridSize=(params['clahe_grid_size'], params['clahe_grid_size'])
+                        )
+                        processed_img = clahe.apply(processed_img)
+                    
+                    elif filter_type == "gaussian_blur" or filter_type == "gaussian":
+                        k = params['gaussian_kernel']
+                        processed_img = cv2.GaussianBlur(processed_img, (k, k), 0)
+                    
+                    elif filter_type == "median_filter" or filter_type == "median":
+                        k = params['median_kernel']
+                        processed_img = cv2.medianBlur(processed_img, k)
+                    
+                    elif filter_type == "bilateral_filter" or filter_type == "bilateral":
+                        d = params['bilateral_d']
+                        sigma = params['bilateral_sigma']
+                        processed_img = cv2.bilateralFilter(processed_img, d, sigma, sigma)
+                    
+                    elif filter_type == "canny":
+                        processed_img = cv2.Canny(processed_img, params['canny_low'], params['canny_high'])
+                    
+                    elif filter_type == "otsu":
+                        _, processed_img = cv2.threshold(processed_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                    
+                    elif filter_type == "otsu_clahe":
+                        clahe = cv2.createCLAHE(
+                            clipLimit=params['clahe_clip_limit'],
+                            tileGridSize=(params['clahe_grid_size'], params['clahe_grid_size'])
+                        )
+                        processed_img = clahe.apply(processed_img)
+                        _, processed_img = cv2.threshold(processed_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                
+                # SEGMENTAÇÃO MULTI-SEED
+                self.log(f"   🎯 Segmentação com {len(self.batch_seeds)} seeds")
+                combined_mask = None
+                
+                for seed_x, seed_y in self.batch_seeds:
+                    # Verifica limites
+                    if seed_x < 0 or seed_y < 0 or seed_x >= processed_img.shape[1] or seed_y >= processed_img.shape[0]:
+                        self.log(f"      ⚠ Seed ({seed_x}, {seed_y}) fora dos limites")
+                        continue
+                    
+                    mask = self.region_growing(processed_img, (seed_x, seed_y), 
+                                              threshold=self.batch_threshold_var.get())
+                    
+                    if combined_mask is None:
+                        combined_mask = mask.copy()
+                    else:
+                        combined_mask = cv2.bitwise_or(combined_mask, mask)
+                
+                if combined_mask is None:
+                    self.log(f"   ⚠ Nenhum seed válido! Pulando...")
+                    error_count += 1
+                    continue
+                
+                # PÓS-PROCESSAMENTO MORFOLÓGICO
+                self.log(f"   🔬 Morfologia: kernel={self.batch_kernel_var.get()}x{self.batch_kernel_var.get()}")
+                
+                kernel_size = self.batch_kernel_var.get()
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+                final_mask = combined_mask.copy()
+                
+                if self.batch_var_opening.get():
+                    final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel)
+                    self.log(f"      ✓ Abertura")
+                
+                if self.batch_var_closing.get():
+                    final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, kernel)
+                    self.log(f"      ✓ Fechamento")
+                
+                if self.batch_var_fill_holes.get():
+                    contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    filled_mask = np.zeros_like(final_mask)
+                    for cnt in contours:
+                        cv2.drawContours(filled_mask, [cnt], 0, 255, -1)
+                    final_mask = filled_mask
+                    self.log(f"      ✓ Preencher buracos")
+                
+                if self.batch_var_smooth.get():
+                    contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    smoothed_mask = np.zeros_like(final_mask)
+                    for cnt in contours:
+                        epsilon = 0.005 * cv2.arcLength(cnt, True)
+                        smoothed_cnt = cv2.approxPolyDP(cnt, epsilon, True)
+                        cv2.drawContours(smoothed_mask, [smoothed_cnt], 0, 255, -1)
+                    final_mask = smoothed_mask
+                    self.log(f"      ✓ Suavizar contornos")
+                
+                # CRIA IMAGEM SEGMENTADA COM CONTORNO VERMELHO
+                img_with_contour = cv2.cvtColor(img_data, cv2.COLOR_GRAY2BGR)
+                contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 50]
+                cv2.drawContours(img_with_contour, large_contours, -1, (0, 0, 255), 3)  # Vermelho
+                
+                # SALVA RESULTADOS
+                base_name = os.path.splitext(filename)[0]
+                if filename.endswith('.nii.gz'):
+                    base_name = base_name.replace('.nii', '')
+                
+                # Salva máscara binária
+                mask_filename = f"{base_name}_mask.png"
+                mask_path = os.path.join(output_folder, mask_filename)
+                cv2.imwrite(mask_path, final_mask)
+                
+                # Salva imagem segmentada com contorno
+                segmented_filename = f"{base_name}_segmented.png"
+                segmented_path = os.path.join(output_folder, segmented_filename)
+                cv2.imwrite(segmented_path, img_with_contour)
+                
+                # Salva imagem filtrada (intermediária)
+                filtered_filename = f"{base_name}_filtered.png"
+                filtered_path = os.path.join(output_folder, filtered_filename)
+                cv2.imwrite(filtered_path, processed_img)
+                
+                num_pixels = np.sum(final_mask == 255)
+                self.log(f"   ✅ Sucesso: {len(large_contours)} região(ões), {num_pixels} pixels")
+                self.log(f"   📁 Salvos: {mask_filename}, {segmented_filename}, {filtered_filename}")
+                
+                success_count += 1
+                
+            except Exception as e:
+                self.log(f"   ❌ ERRO: {str(e)}")
+                error_count += 1
+        
+        # RELATÓRIO FINAL
+        self.log("\n" + "="*80)
+        self.log("📊 RELATÓRIO FINAL")
+        self.log("="*80)
+        self.log(f"✅ Sucesso: {success_count}/{len(nii_files)}")
+        self.log(f"❌ Erros: {error_count}/{len(nii_files)}")
+        self.log(f"📂 Resultados salvos em: {output_folder}")
+        self.log("="*80 + "\n")
+        
+        self.lbl_batch_status.config(
+            text=f"✅ Lote concluído! {success_count} OK, {error_count} erros",
+            foreground="green"
+        )
+        
+        messagebox.showinfo(
+            "Processamento Concluído",
+            f"Processamento em lote finalizado!\n\n"
+            f"✅ Sucesso: {success_count}\n"
+            f"❌ Erros: {error_count}\n\n"
+            f"Resultados salvos em:\n{output_folder}"
+        )
 
     def batch_segment_folder(self):
         """Processa em lote todos os arquivos .nii de uma pasta."""
@@ -946,7 +1999,7 @@ class AlzheimerApp:
                 img_with_contour = cv2.cvtColor(img_data, cv2.COLOR_GRAY2BGR)
                 contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 50]
-                cv2.drawContours(img_with_contour, large_contours, -1, (0, 255, 255), 2)
+                cv2.drawContours(img_with_contour, large_contours, -1, (0, 0, 255), 3)  # Vermelho vivo
                 
                 # Salva os resultados
                 base_name = os.path.splitext(filename)[0]
@@ -1045,10 +2098,10 @@ class AlzheimerApp:
         self.display_image(self.preprocessed_image, self.canvas_preprocessed, "preprocessed")
 
     def on_click_seed_preprocessed(self, event):
-        """Captura clique na janela pré-processada e usa a imagem Otsu+CLAHE diretamente."""
+        """Captura clique na janela FILTRADA (janela 2)."""
         if self.preprocessed_image is None:
-            messagebox.showwarning("Aviso", "Aplique 'Otsu + CLAHE' primeiro!")
-            self.log("⚠ Nenhuma imagem pré-processada disponível. Aplique um filtro primeiro.")
+            messagebox.showwarning("Aviso", "Aplique um filtro primeiro!")
+            self.log("⚠ Nenhuma imagem filtrada disponível. Use a Seção 1 primeiro.")
             return
 
         # Pega coordenadas do clique
@@ -1076,80 +2129,23 @@ class AlzheimerApp:
 
         # Verifica se o clique está dentro da imagem
         if img_x < 0 or img_y < 0 or img_x >= img_w or img_y >= img_h:
-            self.log("Clique fora da imagem pré-processada.")
+            self.log("⚠ Clique fora da imagem.")
             return
 
-        self.log(f"🖼️ Clique na IMAGEM PRÉ-PROCESSADA detectado!")
-        self.log(f"📍 Coordenadas: ({img_x}, {img_y})")
-        self.log(f"🎯 Usando imagem Otsu+CLAHE diretamente para segmentação")
-        self.log(f"⚙️ Configuração: Threshold={self.region_growing_threshold}, Kernel={self.morphology_kernel_size}x{self.morphology_kernel_size}")
-        self.log(f"🔬 Morfologia: Abertura + Fechamento + Preenchimento + Suavização")
+        self.log(f"📍 Clique na FILTRADA: X={img_x}, Y={img_y}")
         
-        # Converte a imagem pré-processada para numpy
-        img_preprocessed_np = np.array(self.preprocessed_image)
+        # Força usar imagem filtrada
+        original_mode = self.segmentation_mode.get()
+        self.segmentation_mode.set("filtered")
         
-        # Pega a imagem original para visualização final
-        img_original_np = np.array(self.original_image)
+        # Executa segmentação
+        self.execute_segmentation_at_point(img_x, img_y, "filtered")
         
-        # Usa a imagem PRÉ-PROCESSADA diretamente para Region Growing
-        if self.multi_seed_mode:
-            self.multi_seed_points.append((img_x, img_y))
-            self.log(f"🎯 Multi-Seed {len(self.multi_seed_points)}: ({img_x}, {img_y})")
-            self.lbl_multi_seed.config(
-                text=f"🎯 Multi-Seed: {len(self.multi_seed_points)} ponto(s) - PRÉ-PROC",
-                foreground="purple"
-            )
-            
-            # Segmenta usando a imagem pré-processada
-            mask = self.region_growing(img_preprocessed_np, (img_x, img_y), 
-                                      threshold=self.region_growing_threshold)
-            
-            # Acumula máscaras
-            if self.accumulated_mask is None:
-                self.accumulated_mask = mask.copy()
-            else:
-                self.accumulated_mask = cv2.bitwise_or(self.accumulated_mask, mask)
-            
-            final_mask = self.apply_morphological_postprocessing(self.accumulated_mask)
-            self.image_mask = final_mask
-            
-            # Visualiza na imagem ORIGINAL
-            img_with_contour = cv2.cvtColor(img_original_np, cv2.COLOR_GRAY2BGR)
-            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 50]
-            cv2.drawContours(img_with_contour, large_contours, -1, (0, 255, 255), 2)
-            
-            self.segmented_image = Image.fromarray(img_with_contour)
-            self.display_image(self.segmented_image, self.canvas_segmented, "segmented")
-            
-            num_pixels = np.sum(final_mask == 255)
-            self.log(f"   ✓ Acumulado: {num_pixels} pixels totais\n")
-            
-        else:
-            # Modo normal: segmentação com um único seed usando imagem pré-processada
-            self.log(f"Aplicando Region Growing na imagem PRÉ-PROCESSADA...")
-            mask = self.region_growing(img_preprocessed_np, (img_x, img_y), 
-                                      threshold=self.region_growing_threshold)
-
-            # Aplica pós-processamento morfológico
-            self.log("Aplicando pós-processamento morfológico...")
-            final_mask = self.apply_morphological_postprocessing(mask)
-            self.image_mask = final_mask
-
-            # Visualiza na imagem ORIGINAL com contorno amarelo
-            img_with_contour = cv2.cvtColor(img_original_np, cv2.COLOR_GRAY2BGR)
-            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 50]
-            cv2.drawContours(img_with_contour, large_contours, -1, (0, 255, 255), 2)
-            
-            self.segmented_image = Image.fromarray(img_with_contour)
-            self.display_image(self.segmented_image, self.canvas_segmented, "segmented")
-
-            num_pixels = np.sum(final_mask == 255)
-            self.log(f"✓ Segmentação concluída. {len(large_contours)} região(ões) | {num_pixels} pixels")
+        # Restaura modo original
+        self.segmentation_mode.set(original_mode)
 
     def on_click_seed(self, event):
-        """Captura clique no canvas para selecionar seed point do region growing."""
+        """Captura clique no canvas ORIGINAL para segmentação."""
         if self.original_image is None:
             return
 
@@ -1178,92 +2174,123 @@ class AlzheimerApp:
 
         # Verifica se o clique está dentro da imagem
         if img_x < 0 or img_y < 0 or img_x >= img_w or img_y >= img_h:
-            self.log("Clique fora da imagem.")
+            self.log("⚠ Clique fora da imagem.")
             return
 
-        # Registra o ponto clicado (para rastreamento)
-        self.registered_points.append((img_x, img_y))
-        self.lbl_clicked_coords.config(text=f"Último: ({img_x}, {img_y}) | Total: {len(self.registered_points)}")
+        self.log(f"📍 Clique na ORIGINAL: X={img_x}, Y={img_y}")
         
-        self.log(f"📍 Ponto {len(self.registered_points)} registrado: X={img_x}, Y={img_y}")
+        # Executa segmentação
+        self.execute_segmentation_at_point(img_x, img_y, "original")
+
+    def execute_segmentation_at_point(self, img_x, img_y, source_canvas):
+        """
+        Executa segmentação em um ponto específico.
         
-        # Se está no modo Multi-Seed, apenas acumula pontos e máscaras
-        if self.multi_seed_mode:
-            self.multi_seed_points.append((img_x, img_y))
-            self.log(f"🎯 Multi-Seed {len(self.multi_seed_points)}: ({img_x}, {img_y})")
-            self.lbl_multi_seed.config(
-                text=f"🎯 Multi-Seed: {len(self.multi_seed_points)} ponto(s) coletado(s)",
-                foreground="purple"
-            )
-            
-            # Segmenta este ponto e acumula
-            img_np = np.array(self.original_image)
-            img_for_segmentation = self.prepare_image_for_segmentation(img_np)
-            
-            mask = self.region_growing(img_for_segmentation, (img_x, img_y), 
-                                      threshold=self.region_growing_threshold)
-            
-            # Acumula máscaras
-            if self.accumulated_mask is None:
-                self.accumulated_mask = mask.copy()
-            else:
-                self.accumulated_mask = cv2.bitwise_or(self.accumulated_mask, mask)
-            
-            # Aplica pós-processamento e visualiza
-            final_mask = self.apply_morphological_postprocessing(self.accumulated_mask)
-            self.image_mask = final_mask
-            
-            # Visualiza
-            img_with_contour = cv2.cvtColor(img_np, cv2.COLOR_GRAY2BGR)
-            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 50]
-            cv2.drawContours(img_with_contour, large_contours, -1, (0, 255, 255), 2)
-            
-            self.segmented_image = Image.fromarray(img_with_contour)
-            self.display_image(self.segmented_image, self.canvas_segmented, "segmented")
-            
-            num_pixels = np.sum(final_mask == 255)
-            self.log(f"   ✓ Acumulado: {num_pixels} pixels totais\n")
-            
+        Args:
+            img_x, img_y: coordenadas do clique
+            source_canvas: "original" ou "filtered"
+        """
+        # Determina qual imagem usar para segmentação
+        seg_mode = self.segmentation_mode.get()
+        
+        if seg_mode == "filtered":
+            # Usa a imagem filtrada (da janela 2)
+            if self.preprocessed_image is None:
+                messagebox.showwarning("Aviso", "Aplique um filtro primeiro!")
+                self.log("⚠ Nenhum filtro aplicado. Use a Seção 1 primeiro.\n")
+                return
+            img_for_seg_pil = self.preprocessed_image
+            self.log(f"🔧 Usando imagem FILTRADA para segmentação")
         else:
-            # Modo normal: segmentação com um único seed
-            self.log(f"🎯 Seed selecionado: ({img_x}, {img_y})")
+            # Usa a imagem original
+            img_for_seg_pil = self.original_image
+            self.log(f"📷 Usando imagem ORIGINAL para segmentação")
+        
+        # Converte para numpy
+        img_for_seg_np = np.array(img_for_seg_pil.convert('L'))
+        
+        # Executa segmentação baseado no método selecionado
+        method = self.segmentation_method.get()
+        
+        if method == "region_growing":
+            self.log(f"🌱 Método: Region Growing (threshold={self.region_growing_threshold})")
             
-            # Converte imagem PIL → numpy
-            img_np = np.array(self.original_image)
+            if self.multi_seed_mode:
+                # Modo Multi-Seed
+                self.multi_seed_points.append((img_x, img_y))
+                self.log(f"🎯 Multi-Seed {len(self.multi_seed_points)}: ({img_x}, {img_y})")
+                self.lbl_multi_seed.config(
+                    text=f"🎯 Multi-Seed: {len(self.multi_seed_points)} ponto(s)",
+                    foreground="purple"
+                )
+                
+                # Aplica region growing
+                mask = self.region_growing(img_for_seg_np, (img_x, img_y), 
+                                          threshold=self.region_growing_threshold)
+                
+                # Acumula máscaras
+                if self.accumulated_mask is None:
+                    self.accumulated_mask = mask.copy()
+                else:
+                    self.accumulated_mask = cv2.bitwise_or(self.accumulated_mask, mask)
+                
+                final_mask = self.apply_morphological_postprocessing(self.accumulated_mask)
+                
+            else:
+                # Modo Single-Seed
+                mask = self.region_growing(img_for_seg_np, (img_x, img_y), 
+                                          threshold=self.region_growing_threshold)
+                final_mask = self.apply_morphological_postprocessing(mask)
             
-            # Prepara imagem para segmentação (CLAHE ou Otsu)
-            img_for_segmentation = self.prepare_image_for_segmentation(img_np)
-
-            # Aplica region growing
-            self.log(f"Aplicando Region Growing (threshold={self.region_growing_threshold})...")
-            mask = self.region_growing(img_for_segmentation, (img_x, img_y), threshold=self.region_growing_threshold)
-
-            # Aplica pós-processamento morfológico
-            self.log("Aplicando pós-processamento morfológico...")
-            final_mask = self.apply_morphological_postprocessing(mask)
+        elif method == "watershed":
+            self.log("🎯 Método: Watershed")
+            # Implementação placeholder do Watershed
+            messagebox.showinfo("Em desenvolvimento", "Watershed será implementado em breve!")
+            return
             
-            self.image_mask = final_mask
-
-            # Cria visualização: imagem original em RGB com contorno AMARELO
-            img_with_contour = cv2.cvtColor(img_np, cv2.COLOR_GRAY2BGR)
+        elif method == "adaptive_threshold":
+            self.log("🔲 Método: Adaptive Thresholding")
+            # Implementação placeholder
+            messagebox.showinfo("Em desenvolvimento", "Adaptive Threshold será implementado em breve!")
+            return
             
-            # Encontra contornos na máscara final
-            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            # Filtra contornos pequenos (ruído)
-            min_area = 50
-            large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
-            
-            # Desenha contornos em AMARELO (BGR: 0, 255, 255)
-            cv2.drawContours(img_with_contour, large_contours, -1, (0, 255, 255), 2)
-            
-            # Converte para PIL e exibe no canvas segmented
-            self.segmented_image = Image.fromarray(img_with_contour)
-            self.display_image(self.segmented_image, self.canvas_segmented, "segmented")
-
-            num_pixels = np.sum(final_mask == 255)
-            self.log(f"✓ Region growing concluído. {len(large_contours)} região(ões) | {num_pixels} pixels segmentados")
+        elif method == "kmeans":
+            self.log("🧲 Método: K-Means Clustering")
+            # Implementação placeholder
+            messagebox.showinfo("Em desenvolvimento", "K-Means será implementado em breve!")
+            return
+        
+        # Armazena máscara
+        self.image_mask = final_mask
+        
+        # Visualiza resultado na janela 3: imagem FILTRADA + contorno
+        if seg_mode == "filtered" and self.preprocessed_image is not None:
+            base_img = np.array(self.preprocessed_image.convert('L'))
+        else:
+            base_img = np.array(self.original_image.convert('L'))
+        
+        # Converte para BGR para desenhar contornos coloridos
+        if len(base_img.shape) == 2:
+            img_with_contour = cv2.cvtColor(base_img, cv2.COLOR_GRAY2BGR)
+        else:
+            img_with_contour = base_img.copy()
+        
+        # Encontra e desenha contornos
+        contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 50]
+        cv2.drawContours(img_with_contour, large_contours, -1, (0, 0, 255), 3)  # Vermelho vivo
+        
+        # Exibe na janela 3
+        self.segmented_image = Image.fromarray(img_with_contour)
+        self.display_image(self.segmented_image, self.canvas_segmented, "segmented")
+        
+        # Estatísticas
+        num_pixels = np.sum(final_mask == 255)
+        self.log(f"✅ Segmentação concluída: {len(large_contours)} região(ões) | {num_pixels} pixels")
+        self.lbl_segment_status.config(
+            text=f"✅ {len(large_contours)} região(ões) | {num_pixels} px",
+            foreground="green"
+        )
 
     def prepare_image_for_segmentation(self, img_np):
         """
@@ -1355,12 +2382,7 @@ class AlzheimerApp:
             processed_mask = cv2.morphologyEx(processed_mask, cv2.MORPH_OPEN, kernel, iterations=1)
             self.log(f"   → Abertura aplicada (kernel {kernel_size}x{kernel_size})")
         
-        # 2. Fechamento (Closing) - Fecha buracos pequenos
-        if self.apply_closing:
-            processed_mask = cv2.morphologyEx(processed_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-            self.log(f"   → Fechamento aplicado (kernel {kernel_size}x{kernel_size})")
-        
-        # 3. Preenchimento de buracos (Fill Holes)
+        # 2. Preenchimento de buracos (Fill Holes)
         if self.apply_fill_holes:
             # Encontra contornos
             contours, _ = cv2.findContours(processed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1373,7 +2395,7 @@ class AlzheimerApp:
             processed_mask = filled_mask
             self.log(f"   → Buracos preenchidos ({len(contours)} regiões)")
         
-        # 4. Suavização de contornos (Contour Smoothing)
+        # 3. Suavização de contornos (Contour Smoothing)
         if self.apply_smooth_contours:
             # Encontra contornos
             contours, _ = cv2.findContours(processed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1390,6 +2412,103 @@ class AlzheimerApp:
             self.log(f"   → Contornos suavizados")
         
         return processed_mask
+
+    def test_segmentation_with_current_params(self):
+        """
+        Testa a segmentação usando os parâmetros ajustáveis atuais.
+        Usa os seeds fixos [(164, 91), (171, 114)] e os parâmetros da interface.
+        """
+        if self.original_image is None:
+            messagebox.showwarning("Aviso", "Por favor, carregue uma imagem primeiro.")
+            return
+        
+        self.log("\n" + "="*80)
+        self.log("🧪 TESTE DE SEGMENTAÇÃO COM PARÂMETROS ATUAIS")
+        self.log("="*80)
+        self.log(f"📌 Seeds: {self.auto_seed_points}")
+        self.log(f"🎚️ Threshold: {self.region_growing_threshold}")
+        self.log(f"🔧 Kernel: {self.morphology_kernel_size}x{self.morphology_kernel_size}")
+        self.log(f"🔹 Abertura: {'✅' if self.apply_opening else '❌'}")
+        self.log(f"🔹 Fechamento: {'✅' if self.apply_closing else '❌'}")
+        self.log(f"🔹 Preencher: {'✅' if self.apply_fill_holes else '❌'}")
+        self.log(f"🔹 Suavizar: {'✅' if self.apply_smooth_contours else '❌'}")
+        self.log(f"🖼️ Modo de Segmentação: {self.segmentation_mode.get().upper()}")
+        
+        # Converte imagem para numpy
+        img_np = np.array(self.original_image.convert('L'))
+        
+        # Aplica CLAHE (sempre)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        img_clahe = clahe.apply(img_np)
+        
+        # Prepara imagem para segmentação baseado no modo selecionado
+        img_for_segmentation = self.prepare_image_for_segmentation(img_clahe)
+        
+        # Aplica Region Growing em cada seed point e combina as máscaras
+        self.log(f"\n🎯 Aplicando Region Growing em {len(self.auto_seed_points)} seed points:")
+        combined_mask = None
+        
+        for i, (seed_x, seed_y) in enumerate(self.auto_seed_points, 1):
+            self.log(f"\n   Seed {i}/{len(self.auto_seed_points)}: ({seed_x}, {seed_y})")
+            
+            # Verifica se o seed está dentro da imagem
+            if seed_x < 0 or seed_y < 0 or seed_x >= img_np.shape[1] or seed_y >= img_np.shape[0]:
+                self.log(f"   ⚠ Seed fora dos limites da imagem! Ignorando...")
+                continue
+            
+            # Aplica region growing neste seed
+            mask = self.region_growing(img_for_segmentation, (seed_x, seed_y), 
+                                      threshold=self.region_growing_threshold)
+            
+            num_pixels = np.sum(mask == 255)
+            self.log(f"   ✓ {num_pixels} pixels segmentados")
+            
+            # Combina com a máscara acumulada
+            if combined_mask is None:
+                combined_mask = mask.copy()
+            else:
+                combined_mask = cv2.bitwise_or(combined_mask, mask)
+
+        if combined_mask is None:
+            self.log("\n❌ Nenhum seed válido! Segmentação falhou.")
+            messagebox.showerror("Erro", "Nenhum seed point válido para segmentação.")
+            return
+
+        # Aplica pós-processamento morfológico
+        self.log("\n🔬 Aplicando pós-processamento morfológico:")
+        final_mask = self.apply_morphological_postprocessing(combined_mask)
+        
+        self.image_mask = final_mask
+
+        # Cria visualização: imagem original em RGB com contorno AMARELO
+        img_with_contour = cv2.cvtColor(img_np, cv2.COLOR_GRAY2BGR)
+        
+        # Encontra contornos na máscara final
+        contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Filtra contornos pequenos (ruído)
+        min_area = 50
+        large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
+        
+        # Desenha contornos em VERMELHO VIVO (BGR: 0, 0, 255)
+        cv2.drawContours(img_with_contour, large_contours, -1, (0, 0, 255), 3)
+        
+        # Converte para PIL e exibe no canvas segmented
+        segmented_pil = Image.fromarray(img_with_contour)
+        self.segmented_image = segmented_pil
+        self.display_image(segmented_pil, self.canvas_segmented, "segmented")
+        
+        # Exibe estatísticas finais
+        total_pixels = np.sum(final_mask == 255)
+        total_regions = len(large_contours)
+        
+        self.log(f"\n✅ Segmentação concluída!")
+        self.log(f"   • Total de pixels segmentados: {total_pixels}")
+        self.log(f"   • Número de regiões: {total_regions}")
+        self.log(f"   • Área percentual: {(total_pixels / (img_np.shape[0] * img_np.shape[1]) * 100):.2f}%")
+        self.log("="*80 + "\n")
+        
+        self.lbl_segment_status.config(text=f"✅ Teste: {total_regions} região(ões) | {total_pixels} pixels")
 
     def segment_ventricles(self):
         """ Executa a segmentação AUTOMÁTICA dos ventrículos usando Region Growing com múltiplos seeds. """
@@ -1458,8 +2577,8 @@ class AlzheimerApp:
         min_area = 50
         large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
         
-        # Desenha contornos em AMARELO (BGR: 0, 255, 255)
-        cv2.drawContours(img_with_contour, large_contours, -1, (0, 255, 255), 2)
+        # Desenha contornos em VERMELHO VIVO (BGR: 0, 0, 255)
+        cv2.drawContours(img_with_contour, large_contours, -1, (0, 0, 255), 3)
         
         # Converte para PIL e exibe no canvas segmented
         self.segmented_image = Image.fromarray(img_with_contour)

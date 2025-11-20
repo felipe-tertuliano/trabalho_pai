@@ -11,3 +11,5 @@ __pycache__/
 axl/
 cor/
 sag/
+output/
+input_axl/
