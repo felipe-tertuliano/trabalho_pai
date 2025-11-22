@@ -88,7 +88,8 @@ class AlzheimerApp:
         # --- Variáveis de Region Growing ---
         self.click_moved_original = False
         self.click_moved_preprocessed = False
-        self.region_growing_threshold = 50  # FIXO: 50
+        self.region_growing_threshold = 50  # Threshold padrão: 50
+        self.region_growing_connectivity = 8  # Conectividade: 4 ou 8 (padrão 8)
         self.use_histogram_equalization = True  # FIXO: CLAHE sempre ativado
         self.use_otsu_for_segmentation = False  # Usar Otsu (binarizada) ou CLAHE (escala de cinza)
         self.multi_seed_mode = False  # Modo de múltiplos seeds manual
@@ -107,11 +108,20 @@ class AlzheimerApp:
         self.current_mouse_x = 0
         self.current_mouse_y = 0
         
-        # --- Seed points FIXOS para segmentação automática ---
+        # --- Seed points FIXOS para segmentação automática (EDITÁVEIS) ---
         self.auto_seed_points = [
             (164, 91),   # Ponto 1 - Ventrículo
             (171, 114),  # Ponto 2 - Ventrículo
+            (84, 141),   # Ponto 3 - Ventrículo
         ]
+        
+        # Limite de pixels para validação de segmentação (se exceder, considera erro)
+        self.max_segmentation_pixels = 50000  # Ajustável - se máscara tiver mais pixels, considera erro
+        
+        # Método alternativo de segmentação quando Region Growing falha
+        self.alternative_segmentation_method = 'roi_fixed'  # Padrão: ROI fixa
+        # Opções: 'roi_fixed', 'spatial_mask', 'connected_components', 'centroid_based',
+        #         'hole_filling', 'flood_fill', 'distance_transform', 'watershed_markers', 'active_contours'
         
         # --- Sistema de Pipeline de Filtros ---
         self.filter_history = []  # Lista de filtros aplicados
@@ -235,6 +245,11 @@ class AlzheimerApp:
         btn_reset_segmented = ttk.Button(zoom_frame, text="↻ Seg", command=lambda: self.reset_zoom("segmented"))
         btn_reset_segmented.pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
         
+        # Label para coordenadas do mouse
+        self.lbl_mouse_coords = ttk.Label(control_frame, text="🖱️ Mouse: X: -- | Y: --", 
+                                          foreground="darkblue", font=("Courier", 9))
+        self.lbl_mouse_coords.pack(pady=5)
+        
         # Separador
         ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
         
@@ -242,19 +257,14 @@ class AlzheimerApp:
         # SEÇÃO 1: FILTROS DE PRÉ-PROCESSAMENTO
         # ═══════════════════════════════════════════════════════════
         
-        # Header clicável para expandir/colapsar
+        # Header da seção 1
         section1_header = ttk.Frame(control_frame)
         section1_header.pack(fill=tk.X, pady=(5,0))
-        
-        self.section1_expanded = tk.BooleanVar(value=True)
-        self.btn_section1_toggle = ttk.Button(section1_header, text="▼", width=3,
-                                               command=lambda: self.toggle_section(1))
-        self.btn_section1_toggle.pack(side=tk.LEFT, padx=2)
         
         ttk.Label(section1_header, text="🔧 SEÇÃO 1: FILTROS", 
                   font=("Arial", 11, "bold"), foreground="darkgreen").pack(side=tk.LEFT, padx=5)
         
-        # Frame da seção 1 (expansível)
+        # Frame da seção 1
         self.section1_frame = ttk.Frame(control_frame)
         self.section1_frame.pack(fill=tk.X, pady=5)
         
@@ -392,14 +402,9 @@ class AlzheimerApp:
         # SEÇÃO 2: SEGMENTAÇÃO
         # ═══════════════════════════════════════════════════════════
         
-        # Header clicável
+        # Header da seção 2
         section2_header = ttk.Frame(control_frame)
         section2_header.pack(fill=tk.X, pady=(5,0))
-        
-        self.section2_expanded = tk.BooleanVar(value=True)
-        self.btn_section2_toggle = ttk.Button(section2_header, text="▼", width=3,
-                                               command=lambda: self.toggle_section(2))
-        self.btn_section2_toggle.pack(side=tk.LEFT, padx=2)
         
         ttk.Label(section2_header, text="✂️ SEÇÃO 2: SEGMENTAÇÃO", 
                   font=("Arial", 11, "bold"), foreground="darkblue").pack(side=tk.LEFT, padx=5)
@@ -408,19 +413,13 @@ class AlzheimerApp:
         self.section2_frame = ttk.Frame(control_frame)
         self.section2_frame.pack(fill=tk.X, pady=5)
         
-        # Escolha de base para segmentação
-        ttk.Label(self.section2_frame, text="Base para Segmentação:", foreground="blue").pack(pady=(5,0))
-        self.segmentation_mode = tk.StringVar(value="filtered")
+        # Informação sobre qual imagem é usada
+        info_frame = ttk.Frame(self.section2_frame)
+        info_frame.pack(pady=(5,10), fill=tk.X)
+        ttk.Label(info_frame, text="ℹ️ A segmentação SEMPRE usa a Janela 2 (Pré-processada)", 
+                  foreground="darkblue", font=("Arial", 8, "italic"), wraplength=340).pack(padx=5)
         
-        rb_seg_frame = ttk.Frame(self.section2_frame)
-        rb_seg_frame.pack(pady=2, fill=tk.X)
-        
-        ttk.Radiobutton(rb_seg_frame, text="Imagem Filtrada (da janela 2)", 
-                       variable=self.segmentation_mode, value="filtered").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(rb_seg_frame, text="Imagem Original (sem filtro)", 
-                       variable=self.segmentation_mode, value="original").pack(anchor=tk.W, padx=20)
-        
-        ttk.Label(self.section2_frame, text="⚙️ Parâmetros de Segmentação:", foreground="blue", font=("Arial", 9, "bold")).pack(pady=(10,5))
+        ttk.Label(self.section2_frame, text="⚙️ Parâmetros de Segmentação:", foreground="blue", font=("Arial", 9, "bold")).pack(pady=(5,5))
         
         # Threshold do Region Growing
         threshold_frame = ttk.Frame(self.section2_frame)
@@ -429,10 +428,21 @@ class AlzheimerApp:
         self.lbl_threshold = ttk.Label(threshold_frame, text="50", foreground="red", font=("Arial", 9, "bold"))
         self.lbl_threshold.pack(side=tk.LEFT, padx=5)
         
-        self.slider_threshold = ttk.Scale(self.section2_frame, from_=10, to=100, orient=tk.HORIZONTAL,
+        self.slider_threshold = ttk.Scale(self.section2_frame, from_=5, to=100, orient=tk.HORIZONTAL,
                                           command=self.update_threshold)
         self.slider_threshold.set(50)
         self.slider_threshold.pack(fill=tk.X, padx=10)
+        
+        # Conectividade do Region Growing
+        connectivity_frame = ttk.Frame(self.section2_frame)
+        connectivity_frame.pack(pady=5, fill=tk.X)
+        ttk.Label(connectivity_frame, text="Conectividade:", foreground="blue").pack(side=tk.LEFT, padx=5)
+        
+        self.connectivity_var = tk.IntVar(value=8)
+        ttk.Radiobutton(connectivity_frame, text="4-vizinhos (↑↓←→)", 
+                       variable=self.connectivity_var, value=4).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(connectivity_frame, text="8-vizinhos (↑↓←→↖↗↙↘)", 
+                       variable=self.connectivity_var, value=8).pack(side=tk.LEFT, padx=5)
         
         # Kernel Morfológico
         kernel_frame = ttk.Frame(self.section2_frame)
@@ -487,15 +497,44 @@ class AlzheimerApp:
         ttk.Radiobutton(self.section2_frame, text="🧲 K-Means Clustering", 
                        variable=self.segmentation_method, value="kmeans").pack(anchor=tk.W, padx=20)
         
+        # Edição de Seeds Fixos
+        seeds_edit_frame = ttk.LabelFrame(self.section2_frame, text="📍 Seeds Fixos (Editáveis)", padding="5")
+        seeds_edit_frame.pack(pady=(10,5), fill=tk.X)
+        
+        # Lista de seeds
+        seeds_list_frame = ttk.Frame(seeds_edit_frame)
+        seeds_list_frame.pack(fill=tk.X, pady=2)
+        
+        self.auto_seeds_listbox = tk.Listbox(seeds_list_frame, height=3, font=("Courier", 9))
+        self.auto_seeds_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,5))
+        self.update_auto_seeds_display()
+        
+        # Botões de edição
+        seeds_buttons_frame = ttk.Frame(seeds_edit_frame)
+        seeds_buttons_frame.pack(fill=tk.X, pady=2)
+        
+        # Adicionar seed
+        add_seed_frame = ttk.Frame(seeds_buttons_frame)
+        add_seed_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(add_seed_frame, text="X:").pack(side=tk.LEFT, padx=2)
+        self.auto_seed_x_entry = ttk.Entry(add_seed_frame, width=6)
+        self.auto_seed_x_entry.pack(side=tk.LEFT, padx=2)
+        ttk.Label(add_seed_frame, text="Y:").pack(side=tk.LEFT, padx=2)
+        self.auto_seed_y_entry = ttk.Entry(add_seed_frame, width=6)
+        self.auto_seed_y_entry.pack(side=tk.LEFT, padx=2)
+        ttk.Button(add_seed_frame, text="➕ Adicionar", 
+                   command=self.add_auto_seed, width=12).pack(side=tk.LEFT, padx=5)
+        
+        # Remover seed selecionado
+        ttk.Button(seeds_buttons_frame, text="➖ Remover Selecionado", 
+                   command=self.remove_auto_seed).pack(pady=2, fill=tk.X)
+        
         # Botões de Segmentação
         ttk.Label(self.section2_frame, text="Executar Segmentação:", foreground="blue").pack(pady=(10,2))
         
         btn_segment_auto = ttk.Button(self.section2_frame, text="▶ Segmentação Automática (Seeds Fixos)", 
                                       command=self.segment_ventricles)
         btn_segment_auto.pack(pady=2, fill=tk.X)
-        
-        ttk.Label(self.section2_frame, text="Seeds Fixos: (164, 91), (171, 114)", 
-                  foreground="gray", font=("Arial", 7)).pack(pady=1)
         
         btn_multi_segment = ttk.Button(self.section2_frame, text="🖱️ Modo Multi-Seed (Clique nas Janelas)", 
                                        command=self.toggle_multi_seed_mode)
@@ -513,106 +552,30 @@ class AlzheimerApp:
         ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
         
         # ═══════════════════════════════════════════════════════════
-        # SEÇÃO 3: PROCESSAMENTO EM LOTE
+        # PROCESSAMENTO EM LOTE (PASTA INTEIRA)
         # ═══════════════════════════════════════════════════════════
         
-        # Header clicável
-        section3_header = ttk.Frame(control_frame)
-        section3_header.pack(fill=tk.X, pady=(5,0))
+        # Header
+        batch_header = ttk.Frame(control_frame)
+        batch_header.pack(fill=tk.X, pady=(5,0))
         
-        self.section3_expanded = tk.BooleanVar(value=True)
-        self.btn_section3_toggle = ttk.Button(section3_header, text="▼", width=3,
-                                               command=lambda: self.toggle_section(3))
-        self.btn_section3_toggle.pack(side=tk.LEFT, padx=2)
-        
-        ttk.Label(section3_header, text="📁 SEÇÃO 3: LOTE", 
+        ttk.Label(batch_header, text="📁 PROCESSAR PASTA INTEIRA", 
                   font=("Arial", 11, "bold"), foreground="darkorange").pack(side=tk.LEFT, padx=5)
         
-        # Frame da seção 3
-        self.section3_frame = ttk.Frame(control_frame)
-        self.section3_frame.pack(fill=tk.X, pady=5)
+        # Frame do batch
+        batch_frame = ttk.Frame(control_frame)
+        batch_frame.pack(fill=tk.X, pady=5)
         
-        ttk.Label(self.section3_frame, text="Configurar Lote:", foreground="blue",
-                  font=("Arial", 9, "bold")).pack(pady=(5,2))
-        
-        btn_config_batch = ttk.Button(self.section3_frame, text="⚙️ Configurar Processamento em Lote", 
+        # Botão principal para abrir configuração
+        btn_batch_config = ttk.Button(batch_frame, text="⚙️ Configurar e Processar Pasta", 
                                       command=self.open_batch_config_window)
-        btn_config_batch.pack(pady=5, fill=tk.X)
+        btn_batch_config.pack(pady=5, fill=tk.X, padx=5)
         
-        btn_batch_simple = ttk.Button(self.section3_frame, text="🔄 Lote Rápido (Parâmetros Atuais)", 
-                                      command=self.batch_segment_folder)
-        btn_batch_simple.pack(pady=2, fill=tk.X)
+        ttk.Label(batch_frame, text="Configure filtros, seeds e processe múltiplos arquivos", 
+                  foreground="gray", font=("Arial", 8)).pack(pady=2)
         
-        self.lbl_batch_status = ttk.Label(self.section3_frame, text="Lote: Aguardando...", 
-                                          foreground="gray", font=("Arial", 8))
-        self.lbl_batch_status.pack(pady=2)
-        
-        # Separador
+        # Separador final
         ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
-        
-        # ═══════════════════════════════════════════════════════════
-        # SEÇÃO 4: FEATURES E MACHINE LEARNING
-        # ═══════════════════════════════════════════════════════════
-        
-        # Header clicável
-        section4_header = ttk.Frame(control_frame)
-        section4_header.pack(fill=tk.X, pady=(5,0))
-        
-        self.section4_expanded = tk.BooleanVar(value=True)
-        self.btn_section4_toggle = ttk.Button(section4_header, text="▼", width=3,
-                                               command=lambda: self.toggle_section(4))
-        self.btn_section4_toggle.pack(side=tk.LEFT, padx=2)
-        
-        ttk.Label(section4_header, text="🤖 SEÇÃO 4: FEATURES E ML", 
-                  font=("Arial", 11, "bold"), foreground="darkgreen").pack(side=tk.LEFT, padx=5)
-        
-        # Frame da seção 4
-        self.section4_frame = ttk.Frame(control_frame)
-        self.section4_frame.pack(fill=tk.X, pady=5)
-        
-        # Sub-seção: Extração de Features
-        ttk.Label(self.section4_frame, text="📊 Extração de Características:", 
-                  foreground="blue", font=("Arial", 9, "bold")).pack(pady=(5,2))
-        
-        btn_extract = ttk.Button(self.section4_frame, text="🔬 Extrair Características", 
-                                command=self.extract_features)
-        btn_extract.pack(pady=2, fill=tk.X)
-        
-        btn_scatterplot = ttk.Button(self.section4_frame, text="📈 Gerar Gráfico de Dispersão", 
-                                     command=self.show_scatterplot)
-        btn_scatterplot.pack(pady=2, fill=tk.X)
-        
-        # Separador interno
-        ttk.Separator(self.section4_frame, orient='horizontal').pack(pady=8, fill=tk.X)
-        
-        # Sub-seção: Machine Learning
-        ttk.Label(self.section4_frame, text="🧠 Machine Learning:", 
-                  foreground="blue", font=("Arial", 9, "bold")).pack(pady=(2,5))
-        
-        # Frame para botões de ML em grid 2x2
-        ml_buttons_frame = ttk.Frame(self.section4_frame)
-        ml_buttons_frame.pack(pady=2, fill=tk.X, padx=5)
-        
-        # Configura as colunas para terem peso igual
-        ml_buttons_frame.columnconfigure(0, weight=1)
-        ml_buttons_frame.columnconfigure(1, weight=1)
-        
-        # Grid 2x2 de botões ML
-        btn_class_shallow = ttk.Button(ml_buttons_frame, text="📊 Classif. Raso\n(XGBoost)", 
-                                       command=self.run_shallow_classifier)
-        btn_class_shallow.grid(row=0, column=0, padx=2, pady=2, sticky="ew")
-        
-        btn_regr_shallow = ttk.Button(ml_buttons_frame, text="📉 Regressão Rasa\n(Linear)", 
-                                      command=self.run_shallow_regressor)
-        btn_regr_shallow.grid(row=0, column=1, padx=2, pady=2, sticky="ew")
-        
-        btn_class_deep = ttk.Button(ml_buttons_frame, text="🧬 Classif. Profunda\n(ResNet50)", 
-                                    command=self.run_deep_classifier)
-        btn_class_deep.grid(row=1, column=0, padx=2, pady=2, sticky="ew")
-        
-        btn_regr_deep = ttk.Button(ml_buttons_frame, text="🔬 Regressão Profunda\n(ResNet50)", 
-                                   command=self.run_deep_regressor)
-        btn_regr_deep.grid(row=1, column=1, padx=2, pady=2, sticky="ew")
         
         # Log
         self.log_text = tk.Text(control_frame, height=10, state=tk.DISABLED)
@@ -694,9 +657,9 @@ class AlzheimerApp:
         if 0 <= img_x < img_w and 0 <= img_y < img_h:
             self.current_mouse_x = img_x
             self.current_mouse_y = img_y
-            self.lbl_mouse_coords.config(text=f"X: {img_x:3d} | Y: {img_y:3d}")
+            self.lbl_mouse_coords.config(text=f"🖱️ Mouse: X: {img_x:3d} | Y: {img_y:3d}")
         else:
-            self.lbl_mouse_coords.config(text="X: -- | Y: --")
+            self.lbl_mouse_coords.config(text="🖱️ Mouse: X: -- | Y: --")
 
     def track_mouse_position_preprocessed(self, event):
         """Rastreia a posição do mouse na imagem pré-processada."""
@@ -724,9 +687,9 @@ class AlzheimerApp:
         
         # Verifica se está dentro da imagem
         if 0 <= img_x < img_w and 0 <= img_y < img_h:
-            self.lbl_mouse_coords.config(text=f"X: {img_x:3d} | Y: {img_y:3d} [PRÉ-PROC]")
+            self.lbl_mouse_coords.config(text=f"🖱️ Mouse: X: {img_x:3d} | Y: {img_y:3d} [PRÉ-PROC]")
         else:
-            self.lbl_mouse_coords.config(text="X: -- | Y: --")
+            self.lbl_mouse_coords.config(text="🖱️ Mouse: X: -- | Y: --")
 
     def clear_registered_points(self):
         """Limpa a lista de pontos registrados."""
@@ -843,49 +806,6 @@ class AlzheimerApp:
         self.canvas_segmented.bind("<ButtonPress-1>", lambda e: self.start_pan(e, "segmented"))
         self.canvas_segmented.bind("<B1-Motion>", lambda e: self.pan_image(e, "segmented"))
         self.canvas_segmented.bind("<ButtonRelease-1>", lambda e: self.stop_pan(e, "segmented"))
-
-    def toggle_section(self, section_num):
-        """Expande/colapsa uma seção."""
-        if section_num == 1:
-            if self.section1_expanded.get():
-                self.section1_frame.pack_forget()
-                self.btn_section1_toggle.config(text="▶")
-                self.section1_expanded.set(False)
-            else:
-                # Reinsere antes do separador da seção 2
-                self.section1_frame.pack(fill=tk.X, pady=5)
-                self.btn_section1_toggle.config(text="▼")
-                self.section1_expanded.set(True)
-        
-        elif section_num == 2:
-            if self.section2_expanded.get():
-                self.section2_frame.pack_forget()
-                self.btn_section2_toggle.config(text="▶")
-                self.section2_expanded.set(False)
-            else:
-                self.section2_frame.pack(fill=tk.X, pady=5)
-                self.btn_section2_toggle.config(text="▼")
-                self.section2_expanded.set(True)
-        
-        elif section_num == 3:
-            if self.section3_expanded.get():
-                self.section3_frame.pack_forget()
-                self.btn_section3_toggle.config(text="▶")
-                self.section3_expanded.set(False)
-            else:
-                self.section3_frame.pack(fill=tk.X, pady=5)
-                self.btn_section3_toggle.config(text="▼")
-                self.section3_expanded.set(True)
-        
-        elif section_num == 4:
-            if self.section4_expanded.get():
-                self.section4_frame.pack_forget()
-                self.btn_section4_toggle.config(text="▶")
-                self.section4_expanded.set(False)
-            else:
-                self.section4_frame.pack(fill=tk.X, pady=5)
-                self.btn_section4_toggle.config(text="▼")
-                self.section4_expanded.set(True)
     
     def update_threshold(self, value):
         """Atualiza o threshold do region growing"""
@@ -906,6 +826,37 @@ class AlzheimerApp:
         self.apply_closing = self.var_closing.get()
         self.apply_fill_holes = self.var_fill_holes.get()
         self.apply_smooth_contours = self.var_smooth.get()
+    
+    def update_auto_seeds_display(self):
+        """Atualiza a lista visual de seeds fixos."""
+        self.auto_seeds_listbox.delete(0, tk.END)
+        for i, (x, y) in enumerate(self.auto_seed_points, 1):
+            self.auto_seeds_listbox.insert(tk.END, f"{i}. ({x}, {y})")
+    
+    def add_auto_seed(self):
+        """Adiciona um novo seed fixo."""
+        try:
+            x = int(self.auto_seed_x_entry.get())
+            y = int(self.auto_seed_y_entry.get())
+            self.auto_seed_points.append((x, y))
+            self.update_auto_seeds_display()
+            self.auto_seed_x_entry.delete(0, tk.END)
+            self.auto_seed_y_entry.delete(0, tk.END)
+            self.log(f"✅ Seed fixo adicionado: ({x}, {y}). Total: {len(self.auto_seed_points)}")
+        except ValueError:
+            messagebox.showerror("Erro", "Digite valores numéricos válidos para X e Y!")
+    
+    def remove_auto_seed(self):
+        """Remove o seed fixo selecionado."""
+        selection = self.auto_seeds_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Aviso", "Selecione um seed para remover!")
+            return
+        
+        index = selection[0]
+        removed = self.auto_seed_points.pop(index)
+        self.update_auto_seeds_display()
+        self.log(f"✅ Seed fixo removido: {removed}. Total: {len(self.auto_seed_points)}")
     
     # --- Métodos de Atualização de Parâmetros de Filtros ---
     
@@ -1403,10 +1354,74 @@ class AlzheimerApp:
         config_window.title("⚙️ Configuração de Processamento em Lote")
         config_window.geometry("700x800")
         config_window.resizable(True, True)
+        config_window.transient(self.root)  # Mantém a janela no topo
+        config_window.grab_set()  # Torna a janela modal
         
-        # Frame principal com scroll
-        main_frame = ttk.Frame(config_window, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        # Container principal com scroll
+        container = ttk.Frame(config_window)
+        container.pack(fill=tk.BOTH, expand=True)
+        
+        # Canvas para scroll
+        canvas = tk.Canvas(container, bg="white", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        
+        # Frame principal (vai dentro do canvas)
+        main_frame = ttk.Frame(canvas, padding="10")
+        
+        # Configuração do scroll
+        def configure_scroll_region(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        
+        main_frame.bind("<Configure>", configure_scroll_region)
+        
+        # Cria janela no canvas
+        canvas_window = canvas.create_window((0, 0), window=main_frame, anchor="nw")
+        
+        # Configura scrollbar
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack canvas e scrollbar
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Ajusta largura do frame quando o canvas é redimensionado
+        def on_canvas_configure(event):
+            canvas_width = event.width
+            canvas.itemconfig(canvas_window, width=canvas_width)
+            configure_scroll_region()
+        
+        canvas.bind('<Configure>', on_canvas_configure)
+        
+        # Bind mouse wheel para scroll (Windows e Linux)
+        def _on_mousewheel(event):
+            if event.delta:
+                # Windows
+                canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            else:
+                # Linux
+                if event.num == 4:
+                    canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    canvas.yview_scroll(1, "units")
+        
+        # Bind para diferentes sistemas
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind_all("<Button-4>", _on_mousewheel)
+        canvas.bind_all("<Button-5>", _on_mousewheel)
+        
+        # Foca no canvas para receber eventos de scroll
+        canvas.focus_set()
+        
+        # Armazena referência do canvas na janela para atualizações
+        config_window.canvas = canvas
+        config_window.main_frame = main_frame
+        
+        # Função para atualizar scroll (pode ser chamada de outras funções)
+        def update_scroll():
+            canvas.update_idletasks()
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        
+        config_window.update_scroll = update_scroll
         
         # Título
         title_label = ttk.Label(main_frame, text="🔧 Configuração Avançada de Lote", 
@@ -1419,8 +1434,10 @@ class AlzheimerApp:
         filter_frame = ttk.LabelFrame(main_frame, text="🎨 1. FILTROS A APLICAR (Pipeline)", padding="10")
         filter_frame.pack(fill=tk.X, pady=10)
         
-        ttk.Label(filter_frame, text="Selecione os filtros e configure parâmetros:", 
-                  foreground="blue").pack(anchor=tk.W, pady=(0,5))
+        ttk.Label(filter_frame, text="📋 Adicione filtros ao pipeline (opcional):", 
+                  foreground="blue", font=("Arial", 9)).pack(anchor=tk.W, pady=(0,2))
+        ttk.Label(filter_frame, text="Os filtros serão aplicados em sequência antes da segmentação.", 
+                  foreground="gray", font=("Arial", 8)).pack(anchor=tk.W, pady=(0,5))
         
         # Lista de filtros selecionados
         self.batch_filters = []  # [(tipo, params), ...]
@@ -1429,21 +1446,22 @@ class AlzheimerApp:
         filter_select_frame = ttk.Frame(filter_frame)
         filter_select_frame.pack(fill=tk.X, pady=5)
         
-        self.batch_filter_var = tk.StringVar(value="clahe")
+        self.batch_filter_var = tk.StringVar(value="CLAHE")
         
-        filter_options = [
-            ("CLAHE", "clahe"),
-            ("Gaussian Blur", "gaussian"),
-            ("Median Filter", "median"),
-            ("Bilateral Filter", "bilateral"),
-            ("Canny", "canny"),
-            ("Otsu", "otsu"),
-            ("Otsu + CLAHE", "otsu_clahe")
-        ]
+        # Mapeamento de nome de exibição para valor interno
+        self.filter_options_map = {
+            "CLAHE": "clahe",
+            "Gaussian Blur": "gaussian",
+            "Median Filter": "median",
+            "Bilateral Filter": "bilateral",
+            "Canny": "canny",
+            "Otsu": "otsu",
+            "Otsu + CLAHE": "otsu_clahe"
+        }
         
         ttk.Label(filter_select_frame, text="Filtro:").pack(side=tk.LEFT, padx=5)
         filter_combo = ttk.Combobox(filter_select_frame, textvariable=self.batch_filter_var, 
-                                    values=[f[0] for f in filter_options], width=20, state="readonly")
+                                    values=list(self.filter_options_map.keys()), width=20, state="readonly")
         filter_combo.pack(side=tk.LEFT, padx=5)
         
         btn_add_filter = ttk.Button(filter_select_frame, text="➕ Adicionar Filtro", 
@@ -1451,10 +1469,19 @@ class AlzheimerApp:
         btn_add_filter.pack(side=tk.LEFT, padx=5)
         
         # Lista de filtros adicionados
-        ttk.Label(filter_frame, text="Pipeline de Filtros:", foreground="blue").pack(anchor=tk.W, pady=(10,2))
+        filter_list_header = ttk.Frame(filter_frame)
+        filter_list_header.pack(fill=tk.X, pady=(10,2))
+        ttk.Label(filter_list_header, text="Pipeline de Filtros:", 
+                  foreground="blue").pack(side=tk.LEFT)
+        self.lbl_filter_count = ttk.Label(filter_list_header, text="(0 filtros)", 
+                                          foreground="gray", font=("Arial", 8))
+        self.lbl_filter_count.pack(side=tk.LEFT, padx=5)
         
         self.batch_filter_list = tk.Listbox(filter_frame, height=4, font=("Courier", 9))
         self.batch_filter_list.pack(fill=tk.X, pady=5)
+        # Mensagem inicial
+        self.batch_filter_list.insert(tk.END, "   (Nenhum filtro adicionado - OPCIONAL)")
+        self.batch_filter_list.config(foreground="gray")
         
         btn_clear_filters = ttk.Button(filter_frame, text="🗑️ Limpar Filtros", 
                                        command=self.clear_batch_filters)
@@ -1515,10 +1542,21 @@ class AlzheimerApp:
                                              foreground="red", font=("Arial", 10, "bold"))
         self.batch_lbl_threshold.pack(side=tk.LEFT, padx=5)
         
-        batch_threshold_slider = ttk.Scale(seg_frame, from_=10, to=100, orient=tk.HORIZONTAL,
+        batch_threshold_slider = ttk.Scale(seg_frame, from_=5, to=100, orient=tk.HORIZONTAL,
                                           command=lambda v: self.update_batch_threshold(v))
         batch_threshold_slider.set(self.region_growing_threshold)
         batch_threshold_slider.pack(fill=tk.X, padx=5)
+        
+        # Conectividade
+        connectivity_batch_frame = ttk.Frame(seg_frame)
+        connectivity_batch_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(connectivity_batch_frame, text="Conectividade:", foreground="blue").pack(side=tk.LEFT, padx=5)
+        
+        self.batch_connectivity_var = tk.IntVar(value=8)
+        ttk.Radiobutton(connectivity_batch_frame, text="4-vizinhos", 
+                       variable=self.batch_connectivity_var, value=4).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(connectivity_batch_frame, text="8-vizinhos", 
+                       variable=self.batch_connectivity_var, value=8).pack(side=tk.LEFT, padx=5)
         
         # Kernel
         kernel_frame = ttk.Frame(seg_frame)
@@ -1574,7 +1612,9 @@ class AlzheimerApp:
     
     def add_filter_to_batch(self, window):
         """Adiciona um filtro à lista de filtros do lote."""
-        filter_type = self.batch_filter_var.get().lower().replace(" ", "_")
+        # Pega o nome de exibição e converte para valor interno
+        display_name = self.batch_filter_var.get()
+        filter_type = self.filter_options_map.get(display_name, "clahe")
         
         # Captura parâmetros atuais do filtro
         params = self.filter_params.copy()
@@ -1584,10 +1624,15 @@ class AlzheimerApp:
             'params': params
         }
         
+        # Remove mensagem inicial se for o primeiro filtro
+        if len(self.batch_filters) == 0:
+            self.batch_filter_list.delete(0, tk.END)
+            self.batch_filter_list.config(foreground="black")
+        
         self.batch_filters.append(filter_info)
         
-        # Atualiza lista visual
-        filter_names = {
+        # Atualiza lista visual com parâmetros
+        filter_display = {
             "clahe": f"CLAHE(clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']})",
             "gaussian": f"Gaussian(k={params['gaussian_kernel']})",
             "median": f"Median(k={params['median_kernel']})",
@@ -1597,18 +1642,59 @@ class AlzheimerApp:
             "otsu_clahe": f"Otsu+CLAHE(clip={params['clahe_clip_limit']:.1f})"
         }
         
-        display_name = filter_names.get(filter_type, filter_type)
-        self.batch_filter_list.insert(tk.END, f"{len(self.batch_filters)}. {display_name}")
+        detailed_name = filter_display.get(filter_type, display_name)
+        self.batch_filter_list.insert(tk.END, f"{len(self.batch_filters)}. {detailed_name}")
         
-        messagebox.showinfo("Filtro Adicionado", 
-                           f"Filtro '{display_name}' adicionado ao pipeline!\n\n"
-                           f"Total de filtros: {len(self.batch_filters)}")
+        # Atualiza contador
+        self.lbl_filter_count.config(text=f"({len(self.batch_filters)} filtro{'s' if len(self.batch_filters) > 1 else ''})", 
+                                     foreground="darkgreen")
+        
+        # Atualiza status visual na própria janela (sem popup)
+        if hasattr(self, 'batch_config_status'):
+            self.batch_config_status.config(
+                text=f"✅ Filtro '{detailed_name}' adicionado! Total: {len(self.batch_filters)}",
+                foreground="green"
+            )
+            
+            # Limpa o status após 3 segundos
+            if hasattr(self, 'batch_status_timer'):
+                try:
+                    window.after_cancel(self.batch_status_timer)
+                except:
+                    pass
+            try:
+                self.batch_status_timer = window.after(3000, lambda: self.batch_config_status.config(text="", foreground="blue") if hasattr(self, 'batch_config_status') else None)
+            except:
+                pass
+        
+        # Atualiza scroll se disponível
+        if hasattr(window, 'update_scroll'):
+            window.update_scroll()
     
     def clear_batch_filters(self):
         """Limpa todos os filtros do lote."""
         self.batch_filters = []
         self.batch_filter_list.delete(0, tk.END)
-        messagebox.showinfo("Filtros Limpos", "Todos os filtros foram removidos do pipeline!")
+        # Restaura mensagem inicial
+        self.batch_filter_list.insert(tk.END, "   (Nenhum filtro adicionado - OPCIONAL)")
+        self.batch_filter_list.config(foreground="gray")
+        # Atualiza contador
+        self.lbl_filter_count.config(text="(0 filtros)", foreground="gray")
+        
+        # Atualiza status visual (sem popup)
+        # Nota: batch_config_status pode não existir se a janela não estiver aberta
+        if hasattr(self, 'batch_config_status'):
+            self.batch_config_status.config(
+                text="✅ Todos os filtros foram removidos!",
+                foreground="orange"
+            )
+            # Limpa o status após 3 segundos
+            if hasattr(self, 'batch_status_timer'):
+                self.batch_config_status.master.after_cancel(self.batch_status_timer)
+            self.batch_status_timer = self.batch_config_status.master.after(
+                3000, 
+                lambda: self.batch_config_status.config(text="", foreground="blue") if hasattr(self, 'batch_config_status') else None
+            )
     
     def add_seed_to_batch(self):
         """Adiciona um seed point à lista."""
@@ -1617,7 +1703,26 @@ class AlzheimerApp:
             y = int(self.batch_seed_y.get())
             self.batch_seeds.append((x, y))
             self.update_seed_list()
-            messagebox.showinfo("Seed Adicionado", f"Seed ({x}, {y}) adicionado!\n\nTotal: {len(self.batch_seeds)}")
+            
+            # Atualiza status visual (sem popup)
+            if hasattr(self, 'batch_config_status'):
+                self.batch_config_status.config(
+                    text=f"✅ Seed ({x}, {y}) adicionado! Total: {len(self.batch_seeds)}",
+                    foreground="green"
+                )
+                # Limpa o status após 3 segundos
+                if hasattr(self, 'batch_status_timer'):
+                    try:
+                        self.batch_config_status.master.after_cancel(self.batch_status_timer)
+                    except:
+                        pass
+                try:
+                    self.batch_status_timer = self.batch_config_status.master.after(
+                        3000, 
+                        lambda: self.batch_config_status.config(text="", foreground="blue") if hasattr(self, 'batch_config_status') else None
+                    )
+                except:
+                    pass
         except ValueError:
             messagebox.showerror("Erro", "Digite valores numéricos válidos para X e Y!")
     
@@ -1625,7 +1730,26 @@ class AlzheimerApp:
         """Limpa todos os seeds."""
         self.batch_seeds = []
         self.update_seed_list()
-        messagebox.showinfo("Seeds Limpos", "Todos os seeds foram removidos!")
+        
+        # Atualiza status visual (sem popup)
+        if hasattr(self, 'batch_config_status'):
+            self.batch_config_status.config(
+                text="✅ Todos os seeds foram removidos!",
+                foreground="orange"
+            )
+            # Limpa o status após 3 segundos
+            if hasattr(self, 'batch_status_timer'):
+                try:
+                    self.batch_config_status.master.after_cancel(self.batch_status_timer)
+                except:
+                    pass
+            try:
+                self.batch_status_timer = self.batch_config_status.master.after(
+                    3000, 
+                    lambda: self.batch_config_status.config(text="", foreground="blue") if hasattr(self, 'batch_config_status') else None
+                )
+            except:
+                pass
     
     def update_seed_list(self):
         """Atualiza a lista visual de seeds."""
@@ -1717,10 +1841,10 @@ class AlzheimerApp:
         for idx, filename in enumerate(nii_files, 1):
             try:
                 self.log(f"\n[{idx}/{len(nii_files)}] Processando: {filename}")
-                self.lbl_batch_status.config(
-                    text=f"Processando {idx}/{len(nii_files)}: {filename[:30]}...",
-                    foreground="blue"
-                )
+                # self.lbl_batch_status.config(
+                #     text=f"Processando {idx}/{len(nii_files)}: {filename[:30]}...",
+                #     foreground="blue"
+                # )
                 self.root.update()
                 
                 # Carrega arquivo .nii
@@ -1791,7 +1915,8 @@ class AlzheimerApp:
                         continue
                     
                     mask = self.region_growing(processed_img, (seed_x, seed_y), 
-                                              threshold=self.batch_threshold_var.get())
+                                              threshold=self.batch_threshold_var.get(),
+                                              connectivity=self.batch_connectivity_var.get())
                     
                     if combined_mask is None:
                         combined_mask = mask.copy()
@@ -1835,6 +1960,24 @@ class AlzheimerApp:
                         cv2.drawContours(smoothed_mask, [smoothed_cnt], 0, 255, -1)
                     final_mask = smoothed_mask
                     self.log(f"      ✓ Suavizar contornos")
+                
+                # VALIDAÇÃO: Verifica se a segmentação não excedeu o limite
+                is_valid, num_pixels = self.validate_segmentation_mask(final_mask, f"(LOTE: {filename})")
+                if not is_valid:
+                    self.log(f"      ⚠️ Region Growing falhou para {filename} ({num_pixels} pixels)")
+                    self.log(f"      🔄 Aplicando método alternativo...")
+                    # Usa método alternativo
+                    final_mask = self.apply_alternative_segmentation(
+                        processed_img, 
+                        method=self.alternative_segmentation_method,
+                        threshold=30
+                    )
+                    # Valida novamente
+                    is_valid_alt, num_pixels_alt = self.validate_segmentation_mask(final_mask, f"(ALTERNATIVO: {filename})")
+                    if is_valid_alt:
+                        self.log(f"      ✅ Método alternativo funcionou! {num_pixels_alt} pixels")
+                    else:
+                        self.log(f"      ⚠️ Método alternativo também excedeu limite ({num_pixels_alt} pixels)")
                 
                 # CRIA IMAGEM SEGMENTADA COM CONTORNO VERMELHO
                 img_with_contour = cv2.cvtColor(img_data, cv2.COLOR_GRAY2BGR)
@@ -1881,10 +2024,10 @@ class AlzheimerApp:
         self.log(f"📂 Resultados salvos em: {output_folder}")
         self.log("="*80 + "\n")
         
-        self.lbl_batch_status.config(
-            text=f"✅ Lote concluído! {success_count} OK, {error_count} erros",
-            foreground="green"
-        )
+        # self.lbl_batch_status.config(
+        #     text=f"✅ Lote concluído! {success_count} OK, {error_count} erros",
+        #     foreground="green"
+        # )
         
         messagebox.showinfo(
             "Processamento Concluído",
@@ -1949,10 +2092,10 @@ class AlzheimerApp:
         for idx, filename in enumerate(nii_files, 1):
             try:
                 self.log(f"\n[{idx}/{len(nii_files)}] Processando: {filename}")
-                self.lbl_batch_status.config(
-                    text=f"Processando {idx}/{len(nii_files)}: {filename[:30]}...",
-                    foreground="blue"
-                )
+                # self.lbl_batch_status.config(
+                #     text=f"Processando {idx}/{len(nii_files)}: {filename[:30]}...",
+                #     foreground="blue"
+                # )
                 self.root.update()  # Atualiza interface
                 
                 # Carrega arquivo .nii
@@ -1979,8 +2122,10 @@ class AlzheimerApp:
                     if seed_x < 0 or seed_y < 0 or seed_x >= img_data.shape[1] or seed_y >= img_data.shape[0]:
                         continue
                     
+                    # Usa parâmetros atuais da interface (não do lote configurado)
                     mask = self.region_growing(img_for_segmentation, (seed_x, seed_y), 
-                                              threshold=self.region_growing_threshold)
+                                              threshold=self.region_growing_threshold,
+                                              connectivity=self.connectivity_var.get())
                     
                     if combined_mask is None:
                         combined_mask = mask.copy()
@@ -2036,10 +2181,10 @@ class AlzheimerApp:
         self.log(f"   • Pasta de saída: {output_folder}")
         self.log("="*70 + "\n")
         
-        self.lbl_batch_status.config(
-            text=f"✓ Concluído: {success_count}/{len(nii_files)} arquivos",
-            foreground="green"
-        )
+        # self.lbl_batch_status.config(
+        #     text=f"✓ Concluído: {success_count}/{len(nii_files)} arquivos",
+        #     foreground="green"
+        # )
         
         messagebox.showinfo(
             "Processamento Concluído",
@@ -2098,7 +2243,7 @@ class AlzheimerApp:
         self.display_image(self.preprocessed_image, self.canvas_preprocessed, "preprocessed")
 
     def on_click_seed_preprocessed(self, event):
-        """Captura clique na janela FILTRADA (janela 2)."""
+        """Captura clique na janela FILTRADA (janela 2) para segmentação."""
         if self.preprocessed_image is None:
             messagebox.showwarning("Aviso", "Aplique um filtro primeiro!")
             self.log("⚠ Nenhuma imagem filtrada disponível. Use a Seção 1 primeiro.")
@@ -2132,20 +2277,13 @@ class AlzheimerApp:
             self.log("⚠ Clique fora da imagem.")
             return
 
-        self.log(f"📍 Clique na FILTRADA: X={img_x}, Y={img_y}")
+        self.log(f"📍 Clique na JANELA 2 (Filtrada): X={img_x}, Y={img_y}")
         
-        # Força usar imagem filtrada
-        original_mode = self.segmentation_mode.get()
-        self.segmentation_mode.set("filtered")
-        
-        # Executa segmentação
+        # Executa segmentação (sempre usa a imagem filtrada)
         self.execute_segmentation_at_point(img_x, img_y, "filtered")
-        
-        # Restaura modo original
-        self.segmentation_mode.set(original_mode)
 
     def on_click_seed(self, event):
-        """Captura clique no canvas ORIGINAL para segmentação."""
+        """Captura clique no canvas ORIGINAL - mas recomenda clicar na janela 2."""
         if self.original_image is None:
             return
 
@@ -2177,9 +2315,10 @@ class AlzheimerApp:
             self.log("⚠ Clique fora da imagem.")
             return
 
-        self.log(f"📍 Clique na ORIGINAL: X={img_x}, Y={img_y}")
+        self.log(f"📍 Clique na JANELA 1 (Original): X={img_x}, Y={img_y}")
+        self.log(f"💡 Dica: Clique na JANELA 2 (Filtrada) para melhores resultados!")
         
-        # Executa segmentação
+        # Executa segmentação (usa a janela 2 se disponível)
         self.execute_segmentation_at_point(img_x, img_y, "original")
 
     def execute_segmentation_at_point(self, img_x, img_y, source_canvas):
@@ -2190,21 +2329,14 @@ class AlzheimerApp:
             img_x, img_y: coordenadas do clique
             source_canvas: "original" ou "filtered"
         """
-        # Determina qual imagem usar para segmentação
-        seg_mode = self.segmentation_mode.get()
-        
-        if seg_mode == "filtered":
-            # Usa a imagem filtrada (da janela 2)
-            if self.preprocessed_image is None:
-                messagebox.showwarning("Aviso", "Aplique um filtro primeiro!")
-                self.log("⚠ Nenhum filtro aplicado. Use a Seção 1 primeiro.\n")
-                return
+        # SEMPRE USA A IMAGEM PRÉ-PROCESSADA (JANELA 2) se disponível
+        if self.preprocessed_image is not None:
             img_for_seg_pil = self.preprocessed_image
-            self.log(f"🔧 Usando imagem FILTRADA para segmentação")
+            self.log(f"🎨 Usando imagem PRÉ-PROCESSADA (Janela 2) para segmentação")
         else:
-            # Usa a imagem original
+            # Se não houver imagem pré-processada, usa a original
             img_for_seg_pil = self.original_image
-            self.log(f"📷 Usando imagem ORIGINAL para segmentação")
+            self.log(f"⚠️ Usando imagem ORIGINAL (sem filtros) - Aplique um filtro primeiro para melhores resultados")
         
         # Converte para numpy
         img_for_seg_np = np.array(img_for_seg_pil.convert('L'))
@@ -2226,7 +2358,8 @@ class AlzheimerApp:
                 
                 # Aplica region growing
                 mask = self.region_growing(img_for_seg_np, (img_x, img_y), 
-                                          threshold=self.region_growing_threshold)
+                                          threshold=self.region_growing_threshold,
+                                          connectivity=self.connectivity_var.get())
                 
                 # Acumula máscaras
                 if self.accumulated_mask is None:
@@ -2239,7 +2372,8 @@ class AlzheimerApp:
             else:
                 # Modo Single-Seed
                 mask = self.region_growing(img_for_seg_np, (img_x, img_y), 
-                                          threshold=self.region_growing_threshold)
+                                          threshold=self.region_growing_threshold,
+                                          connectivity=self.connectivity_var.get())
                 final_mask = self.apply_morphological_postprocessing(mask)
             
         elif method == "watershed":
@@ -2260,11 +2394,28 @@ class AlzheimerApp:
             messagebox.showinfo("Em desenvolvimento", "K-Means será implementado em breve!")
             return
         
+        # VALIDAÇÃO: Verifica se a segmentação não excedeu o limite
+        is_valid, num_pixels = self.validate_segmentation_mask(final_mask, "(MANUAL)")
+        if not is_valid:
+            self.log(f"\n🔄 Region Growing falhou ({num_pixels} pixels). Aplicando método alternativo...")
+            # Usa método alternativo
+            final_mask = self.apply_alternative_segmentation(
+                img_for_seg_np, 
+                method=self.alternative_segmentation_method,
+                threshold=30
+            )
+            # Valida novamente
+            is_valid_alt, num_pixels_alt = self.validate_segmentation_mask(final_mask, "(ALTERNATIVO)")
+            if is_valid_alt:
+                self.log(f"   ✅ Método alternativo funcionou! {num_pixels_alt} pixels")
+            else:
+                self.log(f"   ⚠️ Método alternativo também excedeu limite ({num_pixels_alt} pixels)")
+        
         # Armazena máscara
         self.image_mask = final_mask
         
-        # Visualiza resultado na janela 3: imagem FILTRADA + contorno
-        if seg_mode == "filtered" and self.preprocessed_image is not None:
+        # Visualiza resultado na janela 3: SEMPRE usa a imagem PRÉ-PROCESSADA (se disponível)
+        if self.preprocessed_image is not None:
             base_img = np.array(self.preprocessed_image.convert('L'))
         else:
             base_img = np.array(self.original_image.convert('L'))
@@ -2294,34 +2445,24 @@ class AlzheimerApp:
 
     def prepare_image_for_segmentation(self, img_np):
         """
-        Prepara a imagem para segmentação baseado na escolha do usuário.
+        Prepara a imagem para segmentação.
+        Como agora sempre usamos a Janela 2 (já filtrada), apenas aplicamos CLAHE adicional
+        para melhorar o contraste para o region growing.
         
         Args:
-            img_np: numpy array 2D (grayscale)
+            img_np: numpy array 2D (grayscale) - já vem da janela filtrada
             
         Returns:
-            img_processed: imagem processada (CLAHE ou Otsu)
+            img_processed: imagem processada com CLAHE para melhor segmentação
         """
-        mode = self.segmentation_mode.get()
-        
-        if mode == "otsu":
-            # Aplica CLAHE primeiro
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-            enhanced_img = clahe.apply(img_np)
-            
-            # Depois aplica Otsu
-            _, img_processed = cv2.threshold(enhanced_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            self.log("   → Usando imagem OTSU (binarizada) para segmentação")
-            
-        else:  # "clahe"
-            # Apenas CLAHE
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-            img_processed = clahe.apply(img_np)
-            self.log("   → Usando imagem CLAHE (escala de cinza) para segmentação")
+        # Aplica CLAHE para realçar regiões e melhorar o region growing
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        img_processed = clahe.apply(img_np)
+        self.log("   → Aplicando CLAHE adicional para melhorar região de crescimento")
         
         return img_processed
 
-    def region_growing(self, image, seed, threshold=10):
+    def region_growing(self, image, seed, threshold=10, connectivity=8):
         """
         Algoritmo de Region Growing para segmentação.
         
@@ -2329,6 +2470,7 @@ class AlzheimerApp:
             image: numpy array 2D (grayscale)
             seed: (x, y) pixel inicial clicado
             threshold: variação de intensidade permitida em relação ao seed
+            connectivity: 4 (4-vizinhos) ou 8 (8-vizinhos, padrão)
             
         Returns:
             mask: numpy array 2D binário (0=fundo, 255=região)
@@ -2342,10 +2484,15 @@ class AlzheimerApp:
         queue = [(seed_x, seed_y)]
         mask[seed_y, seed_x] = 255
 
-        # 8-connected neighbors
-        neighbors = [(-1, -1), (0, -1), (1, -1),
-                     (-1,  0),         (1,  0),
-                     (-1,  1), (0,  1), (1,  1)]
+        # Define vizinhança baseado na conectividade
+        if connectivity == 4:
+            # 4-connected neighbors (cima, baixo, esquerda, direita)
+            neighbors = [(0, -1), (-1, 0), (1, 0), (0, 1)]
+        else:
+            # 8-connected neighbors (inclui diagonais)
+            neighbors = [(-1, -1), (0, -1), (1, -1),
+                         (-1,  0),         (1,  0),
+                         (-1,  1), (0,  1), (1,  1)]
 
         while queue:
             x, y = queue.pop(0)
@@ -2412,6 +2559,362 @@ class AlzheimerApp:
             self.log(f"   → Contornos suavizados")
         
         return processed_mask
+    
+    def validate_segmentation_mask(self, mask, context=""):
+        """
+        Valida se a máscara de segmentação não excedeu o limite de pixels.
+        Se exceder, considera que a segmentação falhou.
+        
+        Args:
+            mask: numpy array 2D binário (0=fundo, 255=região)
+            context: string para identificar o contexto (ex: "automática", "manual")
+            
+        Returns:
+            (is_valid, num_pixels): (True/False, número de pixels segmentados)
+        """
+        num_pixels = np.sum(mask == 255)
+        is_valid = num_pixels <= self.max_segmentation_pixels
+        
+        if not is_valid:
+            self.log(f"\n⚠️ VALIDAÇÃO FALHOU {context}:")
+            self.log(f"   Pixels encontrados: {num_pixels}")
+            self.log(f"   Limite máximo: {self.max_segmentation_pixels}")
+            self.log(f"   Excesso: {num_pixels - self.max_segmentation_pixels} pixels")
+            self.log(f"   💡 A segmentação provavelmente capturou muito da imagem.")
+            self.log(f"   🔄 Método alternativo será implementado aqui.")
+        
+        return is_valid, num_pixels
+    
+    # ============================================================================
+    # MÉTODOS ALTERNATIVOS DE SEGMENTAÇÃO (para quando Region Growing falha)
+    # ============================================================================
+    
+    def segment_roi_fixed_rectangle(self, image, roi_width=200, roi_height=200, threshold=30):
+        """
+        1. ROI Fixa / Central Crop (retângulo A×B)
+        Recorta uma janela central e trabalha só nela.
+        """
+        h, w = image.shape
+        center_x, center_y = w // 2, h // 2
+        
+        # Define ROI central
+        x1 = max(0, center_x - roi_width // 2)
+        y1 = max(0, center_y - roi_height // 2)
+        x2 = min(w, center_x + roi_width // 2)
+        y2 = min(h, center_y + roi_height // 2)
+        
+        # Recorta ROI
+        roi = image[y1:y2, x1:x2]
+        
+        # Aplica threshold binário (pixels pretos)
+        _, binary_roi = cv2.threshold(roi, threshold, 255, cv2.THRESH_BINARY_INV)
+        
+        # Cria máscara completa
+        mask = np.zeros((h, w), dtype=np.uint8)
+        mask[y1:y2, x1:x2] = binary_roi
+        
+        self.log(f"   📐 ROI Fixa: ({x1},{y1}) a ({x2},{y2}), tamanho {roi_width}x{roi_height}")
+        return mask
+    
+    def segment_spatial_mask_fixed(self, image, mask_width=200, mask_height=200, threshold=30, shape='rectangular'):
+        """
+        2. Máscara Espacial Fixa (retangular ou elíptica)
+        Aplica uma máscara no centro e ignora o resto.
+        """
+        h, w = image.shape
+        center_x, center_y = w // 2, h // 2
+        
+        # Cria máscara espacial
+        spatial_mask = np.zeros((h, w), dtype=np.uint8)
+        
+        if shape == 'rectangular':
+            x1 = max(0, center_x - mask_width // 2)
+            y1 = max(0, center_y - mask_height // 2)
+            x2 = min(w, center_x + mask_width // 2)
+            y2 = min(h, center_y + mask_height // 2)
+            spatial_mask[y1:y2, x1:x2] = 255
+        else:  # elíptica
+            cv2.ellipse(spatial_mask, (center_x, center_y), 
+                       (mask_width // 2, mask_height // 2), 0, 0, 360, 255, -1)
+        
+        # Aplica threshold na imagem
+        _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
+        
+        # Combina: só pixels pretos dentro da máscara espacial
+        mask = cv2.bitwise_and(binary, spatial_mask)
+        
+        self.log(f"   🎭 Máscara Espacial {shape}: {mask_width}x{mask_height}")
+        return mask
+    
+    def segment_connected_components(self, image, threshold=30, min_area=100, max_components=5):
+        """
+        3. Componentes Conexos (Connected Component Labeling)
+        Rotula blocos pretos e escolhe os do centro pelo tamanho + posição.
+        """
+        h, w = image.shape
+        center_x, center_y = w // 2, h // 2
+        
+        # Threshold binário
+        _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
+        
+        # Rotula componentes conectados
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        
+        # Calcula score para cada componente (tamanho + proximidade do centro)
+        component_scores = []
+        for i in range(1, num_labels):  # Ignora fundo (label 0)
+            area = stats[i, cv2.CC_STAT_AREA]
+            if area < min_area:
+                continue
+            
+            cx, cy = centroids[i]
+            dist_from_center = np.sqrt((cx - center_x)**2 + (cy - center_y)**2)
+            
+            # Score: maior área e mais próximo do centro
+            score = area / (1 + dist_from_center / 100)
+            component_scores.append((i, score, area, dist_from_center))
+        
+        # Ordena por score e pega os melhores
+        component_scores.sort(key=lambda x: x[1], reverse=True)
+        selected_labels = [x[0] for x in component_scores[:max_components]]
+        
+        # Cria máscara com componentes selecionados
+        mask = np.zeros((h, w), dtype=np.uint8)
+        for label in selected_labels:
+            mask[labels == label] = 255
+        
+        self.log(f"   🔗 Componentes Conexos: {len(selected_labels)} componentes selecionados")
+        return mask
+    
+    def segment_centroid_based(self, image, threshold=30, brain_mask=None):
+        """
+        4. Seleção por Centróide / Prior Espacial
+        Calcula centróide do cérebro e pega componentes pretos mais próximos.
+        """
+        h, w = image.shape
+        
+        # Se não tiver máscara do cérebro, usa threshold adaptativo
+        if brain_mask is None:
+            _, brain_mask = cv2.threshold(image, 50, 255, cv2.THRESH_BINARY)
+        
+        # Calcula centróide do cérebro
+        moments = cv2.moments(brain_mask)
+        if moments["m00"] != 0:
+            brain_cx = int(moments["m10"] / moments["m00"])
+            brain_cy = int(moments["m01"] / moments["m00"])
+        else:
+            brain_cx, brain_cy = w // 2, h // 2
+        
+        # Threshold para pixels pretos
+        _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
+        
+        # Componentes conectados
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        
+        # Seleciona componentes próximos do centróide
+        mask = np.zeros((h, w), dtype=np.uint8)
+        for i in range(1, num_labels):
+            cx, cy = centroids[i]
+            dist = np.sqrt((cx - brain_cx)**2 + (cy - brain_cy)**2)
+            
+            # Se estiver dentro de um raio do centróide
+            if dist < min(w, h) * 0.3:  # 30% da dimensão menor
+                mask[labels == i] = 255
+        
+        self.log(f"   📍 Centróide: ({brain_cx}, {brain_cy})")
+        return mask
+    
+    def segment_hole_filling(self, image, threshold=30):
+        """
+        5. Preenchimento de Buracos (Binary Hole Filling / Hole Detection)
+        Detecta cavidades internas automaticamente dentro da massa branca.
+        """
+        # Threshold: branco = cérebro, preto = fundo
+        _, binary_white = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY)
+        
+        # Inverte: agora preto = cérebro, branco = fundo
+        binary_inv = cv2.bitwise_not(binary_white)
+        
+        # Preenche buracos (cavidades pretas dentro do branco)
+        # Flood fill do fundo
+        h, w = binary_inv.shape
+        mask_filled = binary_inv.copy()
+        
+        # Preenche bordas primeiro
+        cv2.floodFill(mask_filled, None, (0, 0), 255)
+        cv2.floodFill(mask_filled, None, (w-1, 0), 255)
+        cv2.floodFill(mask_filled, None, (0, h-1), 255)
+        cv2.floodFill(mask_filled, None, (w-1, h-1), 255)
+        
+        # Buracos são o que ficou preto (não foi preenchido)
+        holes = cv2.bitwise_not(mask_filled)
+        
+        self.log(f"   🕳️ Preenchimento de Buracos: detectados")
+        return holes
+    
+    def segment_flood_fill_background(self, image, threshold=30):
+        """
+        6. Flood Fill do Fundo + Inversão
+        Separa fundo de buracos internos.
+        """
+        h, w = image.shape
+        
+        # Threshold binário
+        _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
+        
+        # Flood fill do fundo (bordas)
+        mask = binary.copy()
+        cv2.floodFill(mask, None, (0, 0), 0)
+        cv2.floodFill(mask, None, (w-1, 0), 0)
+        cv2.floodFill(mask, None, (0, h-1), 0)
+        cv2.floodFill(mask, None, (w-1, h-1), 0)
+        
+        # O que não foi preenchido são os buracos internos
+        holes = cv2.bitwise_not(mask)
+        holes = cv2.bitwise_and(holes, binary)  # Só dentro da região branca
+        
+        self.log(f"   🌊 Flood Fill do Fundo: aplicado")
+        return holes
+    
+    def segment_distance_transform(self, image, threshold=30, brain_mask=None):
+        """
+        7. Transformada de Distância + Limiar no Interior
+        Pega só a região mais interna da máscara do cérebro e extrai o preto dali.
+        """
+        h, w = image.shape
+        
+        # Máscara do cérebro (se não fornecida)
+        if brain_mask is None:
+            _, brain_mask = cv2.threshold(image, 50, 255, cv2.THRESH_BINARY)
+        
+        # Transformada de distância (distância de cada pixel até a borda)
+        dist_transform = cv2.distanceTransform(brain_mask, cv2.DIST_L2, 5)
+        
+        # Normaliza
+        dist_transform = cv2.normalize(dist_transform, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        
+        # Pega apenas região mais interna (últimos 30% da distância)
+        _, inner_region = cv2.threshold(dist_transform, int(255 * 0.7), 255, cv2.THRESH_BINARY)
+        
+        # Dentro dessa região, pega pixels pretos
+        _, black_pixels = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
+        
+        # Combina: buracos pretos dentro da região interna
+        mask = cv2.bitwise_and(black_pixels, inner_region)
+        
+        self.log(f"   📏 Transformada de Distância: região interna")
+        return mask
+    
+    def segment_watershed_markers(self, image, threshold=30, num_markers=3):
+        """
+        8. Watershed por Marcadores (Marker-based Watershed)
+        Bom quando os buracos pretos se tocam e precisa dividir.
+        """
+        h, w = image.shape
+        
+        # Threshold binário
+        _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
+        
+        # Operação morfológica para separar objetos que se tocam
+        kernel = np.ones((3, 3), np.uint8)
+        sure_bg = cv2.dilate(binary, kernel, iterations=3)
+        
+        # Encontra região certa (sure foreground)
+        dist_transform = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+        _, sure_fg = cv2.threshold(dist_transform, 0.7 * dist_transform.max(), 255, 0)
+        sure_fg = np.uint8(sure_fg)
+        
+        # Região desconhecida
+        unknown = cv2.subtract(sure_bg, sure_fg)
+        
+        # Marcadores
+        _, markers = cv2.connectedComponents(sure_fg)
+        markers = markers + 1
+        markers[unknown == 255] = 0
+        
+        # Watershed
+        image_color = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        markers = cv2.watershed(image_color, markers)
+        
+        # Cria máscara (marcadores > 1 são objetos)
+        mask = np.zeros((h, w), dtype=np.uint8)
+        mask[markers > 1] = 255
+        
+        self.log(f"   🌊 Watershed com Marcadores: {num_markers} marcadores")
+        return mask
+    
+    def segment_active_contours(self, image, threshold=30, init_contour=None):
+        """
+        9. Active Contours / Snakes
+        Contornos ativos que se ajustam às bordas.
+        """
+        # Threshold para criar imagem binária
+        _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
+        
+        # Se não tiver contorno inicial, cria um circular no centro
+        h, w = image.shape
+        if init_contour is None:
+            center_x, center_y = w // 2, h // 2
+            radius = min(w, h) // 4
+            theta = np.linspace(0, 2*np.pi, 100)
+            init_contour = np.array([[center_x + radius * np.cos(t), 
+                                     center_y + radius * np.sin(t)] for t in theta], dtype=np.int32)
+        
+        # Aplica active contours (simplificado - usa findContours como aproximação)
+        # Em implementação completa, usaria scipy ou implementação própria
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Encontra contorno mais próximo do inicial
+        if len(contours) > 0:
+            # Seleciona maior contorno interno
+            mask = np.zeros((h, w), dtype=np.uint8)
+            largest_contour = max(contours, key=cv2.contourArea)
+            cv2.drawContours(mask, [largest_contour], -1, 255, -1)
+        else:
+            mask = np.zeros((h, w), dtype=np.uint8)
+        
+        self.log(f"   🐍 Active Contours: aplicado")
+        return mask
+    
+    def apply_alternative_segmentation(self, image, method='roi_fixed', **kwargs):
+        """
+        Aplica método alternativo de segmentação quando Region Growing falha.
+        
+        Args:
+            image: numpy array 2D (grayscale)
+            method: nome do método a usar
+            **kwargs: parâmetros específicos do método
+            
+        Returns:
+            mask: numpy array 2D binário
+        """
+        self.log(f"\n🔄 Aplicando método alternativo: {method}")
+        
+        method_map = {
+            'roi_fixed': self.segment_roi_fixed_rectangle,
+            'spatial_mask': self.segment_spatial_mask_fixed,
+            'connected_components': self.segment_connected_components,
+            'centroid_based': self.segment_centroid_based,
+            'hole_filling': self.segment_hole_filling,
+            'flood_fill': self.segment_flood_fill_background,
+            'distance_transform': self.segment_distance_transform,
+            'watershed_markers': self.segment_watershed_markers,
+            'active_contours': self.segment_active_contours,
+        }
+        
+        if method not in method_map:
+            self.log(f"   ⚠️ Método '{method}' não encontrado, usando 'roi_fixed'")
+            method = 'roi_fixed'
+        
+        try:
+            mask = method_map[method](image, **kwargs)
+            num_pixels = np.sum(mask == 255)
+            self.log(f"   ✅ Método alternativo concluído: {num_pixels} pixels")
+            return mask
+        except Exception as e:
+            self.log(f"   ❌ Erro no método alternativo: {e}")
+            # Fallback para ROI fixa
+            return self.segment_roi_fixed_rectangle(image)
 
     def test_segmentation_with_current_params(self):
         """
@@ -2432,17 +2935,18 @@ class AlzheimerApp:
         self.log(f"🔹 Fechamento: {'✅' if self.apply_closing else '❌'}")
         self.log(f"🔹 Preencher: {'✅' if self.apply_fill_holes else '❌'}")
         self.log(f"🔹 Suavizar: {'✅' if self.apply_smooth_contours else '❌'}")
-        self.log(f"🖼️ Modo de Segmentação: {self.segmentation_mode.get().upper()}")
+        self.log(f"🖼️ Usando: Janela 2 (Pré-processada)")
         
-        # Converte imagem para numpy
-        img_np = np.array(self.original_image.convert('L'))
+        # SEMPRE USA A IMAGEM PRÉ-PROCESSADA (JANELA 2) se disponível
+        if self.preprocessed_image is not None:
+            img_np = np.array(self.preprocessed_image.convert('L'))
+            self.log("✅ Usando imagem da Janela 2 (Filtrada)")
+        else:
+            img_np = np.array(self.original_image.convert('L'))
+            self.log("⚠️ Usando imagem original - Aplique um filtro primeiro!")
         
-        # Aplica CLAHE (sempre)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        img_clahe = clahe.apply(img_np)
-        
-        # Prepara imagem para segmentação baseado no modo selecionado
-        img_for_segmentation = self.prepare_image_for_segmentation(img_clahe)
+        # Prepara imagem para segmentação (aplica CLAHE adicional)
+        img_for_segmentation = self.prepare_image_for_segmentation(img_np)
         
         # Aplica Region Growing em cada seed point e combina as máscaras
         self.log(f"\n🎯 Aplicando Region Growing em {len(self.auto_seed_points)} seed points:")
@@ -2458,7 +2962,8 @@ class AlzheimerApp:
             
             # Aplica region growing neste seed
             mask = self.region_growing(img_for_segmentation, (seed_x, seed_y), 
-                                      threshold=self.region_growing_threshold)
+                                      threshold=self.region_growing_threshold,
+                                      connectivity=self.connectivity_var.get())
             
             num_pixels = np.sum(mask == 255)
             self.log(f"   ✓ {num_pixels} pixels segmentados")
@@ -2477,6 +2982,23 @@ class AlzheimerApp:
         # Aplica pós-processamento morfológico
         self.log("\n🔬 Aplicando pós-processamento morfológico:")
         final_mask = self.apply_morphological_postprocessing(combined_mask)
+        
+        # VALIDAÇÃO: Verifica se a segmentação não excedeu o limite
+        is_valid, num_pixels = self.validate_segmentation_mask(final_mask, "(TESTE)")
+        if not is_valid:
+            self.log(f"\n🔄 Region Growing falhou ({num_pixels} pixels). Aplicando método alternativo...")
+            # Usa método alternativo
+            final_mask = self.apply_alternative_segmentation(
+                img_for_segmentation, 
+                method=self.alternative_segmentation_method,
+                threshold=30
+            )
+            # Valida novamente
+            is_valid_alt, num_pixels_alt = self.validate_segmentation_mask(final_mask, "(ALTERNATIVO)")
+            if is_valid_alt:
+                self.log(f"   ✅ Método alternativo funcionou! {num_pixels_alt} pixels")
+            else:
+                self.log(f"   ⚠️ Método alternativo também excedeu limite ({num_pixels_alt} pixels)")
         
         self.image_mask = final_mask
 
@@ -2525,8 +3047,13 @@ class AlzheimerApp:
         self.log(f"Kernel morfológico: {self.morphology_kernel_size}x{self.morphology_kernel_size}")
         self.log("-"*60)
 
-        # Converte a imagem PIL para formato OpenCV (Numpy array)
-        img_np = np.array(self.original_image)
+        # SEMPRE USA A IMAGEM PRÉ-PROCESSADA (JANELA 2) se disponível, senão usa a original
+        if self.preprocessed_image is not None:
+            img_np = np.array(self.preprocessed_image)
+            self.log("🎨 Usando imagem PRÉ-PROCESSADA (Janela 2) para segmentação")
+        else:
+            img_np = np.array(self.original_image)
+            self.log("⚠️ Usando imagem ORIGINAL (sem filtros) - Aplique um filtro primeiro para melhores resultados")
         
         # Prepara imagem para segmentação (CLAHE ou Otsu baseado na escolha)
         img_for_segmentation = self.prepare_image_for_segmentation(img_np)
@@ -2545,7 +3072,8 @@ class AlzheimerApp:
             
             # Aplica region growing neste seed
             mask = self.region_growing(img_for_segmentation, (seed_x, seed_y), 
-                                      threshold=self.region_growing_threshold)
+                                      threshold=self.region_growing_threshold,
+                                      connectivity=self.connectivity_var.get())
             
             num_pixels = np.sum(mask == 255)
             self.log(f"   ✓ {num_pixels} pixels segmentados")
@@ -2565,6 +3093,23 @@ class AlzheimerApp:
         self.log("\n🔬 Aplicando pós-processamento morfológico:")
         final_mask = self.apply_morphological_postprocessing(combined_mask)
         
+        # VALIDAÇÃO: Verifica se a segmentação não excedeu o limite
+        is_valid, num_pixels_final = self.validate_segmentation_mask(final_mask, "(AUTOMÁTICA)")
+        if not is_valid:
+            self.log(f"\n🔄 Region Growing falhou ({num_pixels_final} pixels). Aplicando método alternativo...")
+            # Usa método alternativo
+            final_mask = self.apply_alternative_segmentation(
+                img_for_segmentation, 
+                method=self.alternative_segmentation_method,
+                threshold=30
+            )
+            # Valida novamente
+            is_valid_alt, num_pixels_alt = self.validate_segmentation_mask(final_mask, "(ALTERNATIVO)")
+            if is_valid_alt:
+                self.log(f"   ✅ Método alternativo funcionou! {num_pixels_alt} pixels")
+            else:
+                self.log(f"   ⚠️ Método alternativo também excedeu limite ({num_pixels_alt} pixels)")
+        
         self.image_mask = final_mask
 
         # Cria visualização: imagem original em RGB com contorno AMARELO
@@ -2583,8 +3128,6 @@ class AlzheimerApp:
         # Converte para PIL e exibe no canvas segmented
         self.segmented_image = Image.fromarray(img_with_contour)
         self.display_image(self.segmented_image, self.canvas_segmented, "segmented")
-
-        num_pixels_final = np.sum(final_mask == 255)
         total_area = sum([cv2.contourArea(cnt) for cnt in large_contours])
         
         self.log("-"*60)
