@@ -627,6 +627,8 @@ class AlzheimerApp:
         file_menu.add_command(label="Carregar CSV", command=self.load_csv)
         file_menu.add_command(label="Carregar Imagem...", command=self.load_image)
         file_menu.add_separator()
+        file_menu.add_command(label="🔄 Fazer Merge de CSVs", command=self.merge_csv_files)
+        file_menu.add_separator()
         file_menu.add_command(label="Sair", command=self.root.quit)
 
         # Menu Acessibilidade [cite: 75]
@@ -2085,6 +2087,17 @@ class AlzheimerApp:
             csv_path = self.salvar_descritores_csv(output_dir=output_folder)
             if csv_path:
                 self.log(f"📄 CSV de descritores salvo: {csv_path}")
+                
+                # Faz merge automático dos CSVs
+                self.log("\n🔄 Executando merge automático dos CSVs...")
+                merged_path = self.merge_csv_files(
+                    demographic_csv_path="oasis_longitudinal_demographic.csv",
+                    descriptors_csv_path=csv_path,
+                    output_path="merged_data.csv",
+                    show_messagebox=False  # Não mostra messagebox quando executado automaticamente
+                )
+                if merged_path:
+                    self.log(f"✅ Merge concluído: {merged_path}")
         
         # RELATÓRIO FINAL
         self.log("\n" + "="*80)
@@ -2261,6 +2274,17 @@ class AlzheimerApp:
             csv_path = self.salvar_descritores_csv(output_dir=output_folder)
             if csv_path:
                 self.log(f"📄 CSV de descritores salvo: {csv_path}")
+                
+                # Faz merge automático dos CSVs
+                self.log("\n🔄 Executando merge automático dos CSVs...")
+                merged_path = self.merge_csv_files(
+                    demographic_csv_path="oasis_longitudinal_demographic.csv",
+                    descriptors_csv_path=csv_path,
+                    output_path="merged_data.csv",
+                    show_messagebox=False  # Não mostra messagebox quando executado automaticamente
+                )
+                if merged_path:
+                    self.log(f"✅ Merge concluído: {merged_path}")
         
         # Relatório final
         self.log("-"*70)
@@ -3457,10 +3481,33 @@ class AlzheimerApp:
             # Cria DataFrame
             df = pd.DataFrame(self.descriptors_list)
             
+            # Remove sufixo "_axl" dos IDs
+            if 'id' in df.columns:
+                df['id'] = df['id'].astype(str).str.replace('_axl$', '', regex=True)
+            
+            # Renomeia coluna 'id' para 'MRI ID'
+            df = df.rename(columns={'id': 'MRI ID'})
+            
             # Garante ordem das colunas
-            columns_order = ['id', 'area', 'perimeter', 'circularity', 'eccentricity', 
+            columns_order = ['MRI ID', 'area', 'perimeter', 'circularity', 'eccentricity', 
                            'solidity', 'extent', 'aspect_ratio']
             df = df[columns_order]
+            
+            # Converte colunas numéricas para string com vírgula como separador decimal
+            numeric_columns = ['area', 'perimeter', 'circularity', 'eccentricity', 
+                             'solidity', 'extent', 'aspect_ratio']
+            for col in numeric_columns:
+                if col in df.columns:
+                    # Formata números com vírgula como separador decimal, mantendo precisão
+                    if col in ['area', 'perimeter']:
+                        # Área e perímetro: 2 casas decimais
+                        df[col] = df[col].apply(lambda x: f"{float(x):.2f}".replace('.', ',') if pd.notna(x) else '')
+                    elif col in ['circularity', 'eccentricity', 'solidity', 'extent']:
+                        # Circularidade, excentricidade, solidez, extent: 4 casas decimais
+                        df[col] = df[col].apply(lambda x: f"{float(x):.4f}".replace('.', ',') if pd.notna(x) else '')
+                    elif col == 'aspect_ratio':
+                        # Aspect ratio: 4 casas decimais
+                        df[col] = df[col].apply(lambda x: f"{float(x):.4f}".replace('.', ',') if pd.notna(x) else '')
             
             # Define caminho de saída
             if output_dir is None:
@@ -3468,8 +3515,8 @@ class AlzheimerApp:
             else:
                 output_path = os.path.join(output_dir, "descritores.csv")
             
-            # Salva CSV
-            df.to_csv(output_path, index=False)
+            # Salva CSV com ponto e vírgula como separador
+            df.to_csv(output_path, index=False, sep=';')
             
             self.log(f"\n✅ CSV de descritores salvo: {output_path}")
             self.log(f"   Total de registros: {len(df)}")
@@ -3479,6 +3526,141 @@ class AlzheimerApp:
             
         except Exception as e:
             self.log(f"❌ Erro ao salvar CSV de descritores: {e}")
+            return None
+    
+    def merge_csv_files(self, demographic_csv_path=None, descriptors_csv_path=None, output_path=None, show_messagebox=True):
+        """
+        Faz merge dos CSVs de demografia e descritores baseado na coluna MRI ID.
+        
+        Args:
+            demographic_csv_path: caminho do CSV de demografia (oasis_longitudinal_demographic.csv)
+            descriptors_csv_path: caminho do CSV de descritores (descritores.csv)
+            output_path: caminho de saída para o CSV merged (merged_data.csv)
+            show_messagebox: se True, mostra messagebox em caso de erro/sucesso (padrão: True)
+        """
+        try:
+            # Define caminhos padrão se não fornecidos
+            if demographic_csv_path is None:
+                demographic_csv_path = "oasis_longitudinal_demographic.csv"
+            if descriptors_csv_path is None:
+                descriptors_csv_path = os.path.join("output", "descritores.csv")
+            if output_path is None:
+                output_path = "merged_data.csv"
+            
+            self.log("\n" + "="*80)
+            self.log("🔄 MERGE DE CSVs")
+            self.log("="*80)
+            self.log(f"📄 CSV Demografia: {demographic_csv_path}")
+            self.log(f"📄 CSV Descritores: {descriptors_csv_path}")
+            self.log(f"📄 CSV Saída: {output_path}")
+            self.log("-"*80)
+            
+            # Verifica se os arquivos existem
+            if not os.path.exists(demographic_csv_path):
+                self.log(f"❌ Arquivo não encontrado: {demographic_csv_path}")
+                if show_messagebox:
+                    messagebox.showerror("Erro", f"Arquivo não encontrado: {demographic_csv_path}")
+                return None
+            
+            if not os.path.exists(descriptors_csv_path):
+                self.log(f"❌ Arquivo não encontrado: {descriptors_csv_path}")
+                if show_messagebox:
+                    messagebox.showerror("Erro", f"Arquivo não encontrado: {descriptors_csv_path}")
+                return None
+            
+            # Lê os CSVs
+            self.log("📖 Lendo CSVs...")
+            
+            # Detecta separador do CSV de demografia
+            with open(demographic_csv_path, 'r', encoding='utf-8') as f:
+                first_line = f.readline()
+                demographic_sep = ';' if ';' in first_line else ','
+            
+            # Lê CSV de demografia
+            df_demographic = pd.read_csv(demographic_csv_path, sep=demographic_sep, encoding='utf-8')
+            self.log(f"   ✓ Demografia: {len(df_demographic)} registros, {len(df_demographic.columns)} colunas")
+            
+            # Lê CSV de descritores (sempre usa ; como separador)
+            df_descriptors = pd.read_csv(descriptors_csv_path, sep=';', encoding='utf-8')
+            self.log(f"   ✓ Descritores: {len(df_descriptors)} registros, {len(df_descriptors.columns)} colunas")
+            
+            # Verifica se a coluna MRI ID existe em ambos
+            if 'MRI ID' not in df_demographic.columns:
+                self.log("❌ Coluna 'MRI ID' não encontrada no CSV de demografia")
+                self.log(f"   Colunas disponíveis: {list(df_demographic.columns)}")
+                if show_messagebox:
+                    messagebox.showerror("Erro", "Coluna 'MRI ID' não encontrada no CSV de demografia")
+                return None
+            
+            if 'MRI ID' not in df_descriptors.columns:
+                self.log("❌ Coluna 'MRI ID' não encontrada no CSV de descritores")
+                self.log(f"   Colunas disponíveis: {list(df_descriptors.columns)}")
+                if show_messagebox:
+                    messagebox.showerror("Erro", "Coluna 'MRI ID' não encontrada no CSV de descritores")
+                return None
+            
+            # Remove espaços em branco dos IDs (se houver)
+            df_demographic['MRI ID'] = df_demographic['MRI ID'].astype(str).str.strip()
+            df_descriptors['MRI ID'] = df_descriptors['MRI ID'].astype(str).str.strip()
+            
+            # Faz o merge
+            self.log("\n🔗 Fazendo merge baseado em 'MRI ID'...")
+            merged_df = pd.merge(df_demographic, df_descriptors, on='MRI ID', how='inner')
+            
+            self.log(f"   ✓ Merge concluído: {len(merged_df)} registros combinados")
+            self.log(f"   ✓ Colunas totais: {len(merged_df.columns)}")
+            
+            # Estatísticas do merge
+            self.log(f"\n📊 Estatísticas do merge:")
+            self.log(f"   • Registros no CSV demografia: {len(df_demographic)}")
+            self.log(f"   • Registros no CSV descritores: {len(df_descriptors)}")
+            self.log(f"   • Registros após merge: {len(merged_df)}")
+            
+            # IDs que não foram combinados
+            ids_demographic = set(df_demographic['MRI ID'].unique())
+            ids_descriptors = set(df_descriptors['MRI ID'].unique())
+            ids_merged = set(merged_df['MRI ID'].unique())
+            
+            ids_only_demographic = ids_demographic - ids_merged
+            ids_only_descriptors = ids_descriptors - ids_merged
+            
+            if ids_only_demographic:
+                self.log(f"   ⚠ IDs apenas em demografia (não combinados): {len(ids_only_demographic)}")
+                if len(ids_only_demographic) <= 10:
+                    self.log(f"      {list(ids_only_demographic)}")
+            
+            if ids_only_descriptors:
+                self.log(f"   ⚠ IDs apenas em descritores (não combinados): {len(ids_only_descriptors)}")
+                if len(ids_only_descriptors) <= 10:
+                    self.log(f"      {list(ids_only_descriptors)}")
+            
+            # Salva o CSV merged
+            # Usa o mesmo separador do CSV de demografia
+            merged_df.to_csv(output_path, index=False, sep=demographic_sep, encoding='utf-8')
+            
+            self.log(f"\n✅ CSV merged salvo: {output_path}")
+            self.log(f"   Total de registros: {len(merged_df)}")
+            self.log(f"   Total de colunas: {len(merged_df.columns)}")
+            self.log("="*80 + "\n")
+            
+            if show_messagebox:
+                messagebox.showinfo(
+                    "Merge Concluído",
+                    f"CSV merged salvo com sucesso!\n\n"
+                    f"Arquivo: {output_path}\n"
+                    f"Registros: {len(merged_df)}\n"
+                    f"Colunas: {len(merged_df.columns)}"
+                )
+            
+            return output_path
+            
+        except Exception as e:
+            error_msg = f"Erro ao fazer merge dos CSVs: {e}"
+            self.log(f"❌ {error_msg}")
+            if show_messagebox:
+                messagebox.showerror("Erro", error_msg)
+            import traceback
+            self.log(traceback.format_exc())
             return None
 
     def show_scatterplot(self):
