@@ -1,3 +1,5 @@
+373
+
 remover 
 
 OAS2_0013_MR2_axl
@@ -6,4 +8,20 @@ OAS2_0081_MR1_axl
 OAS2_0172_MR2_axl
 OAS2_0179_MR1_axl
 
-84, 141
+
+nao conseguimos segmentar
+
+OAS2_0004_MR2_axl
+OAS2_0051_MR3_axl
+OAS2_0051_MR2_axl
+OAS2_0098_MR1_axl
+OAS2_0098_MR2_axl
+OAS2_0118_MR1_axl
+OAS2_0156_MR1_axl
+OAS2_0159_MR1_axl
+
+13
+
+158,98
+109,124
+109,81

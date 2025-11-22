@@ -27,6 +27,7 @@ import nibabel as nib  # Para arquivos Nifti
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
+from skimage import measure  # Para descritores morfológicos
 
 # Machine Learning
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
@@ -110,9 +111,9 @@ class AlzheimerApp:
         
         # --- Seed points FIXOS para segmentação automática (EDITÁVEIS) ---
         self.auto_seed_points = [
-            (164, 91),   # Ponto 1 - Ventrículo
-            (171, 114),  # Ponto 2 - Ventrículo
-            (84, 141),   # Ponto 3 - Ventrículo
+            (158,98),
+            (109,124),
+            (109,81),
         ]
         
         # Limite de pixels para validação de segmentação (se exceder, considera erro)
@@ -128,6 +129,9 @@ class AlzheimerApp:
         self.original_image_backup = None  # Backup da imagem original
         self.current_filtered_image = None  # Imagem com filtros aplicados
         
+        # --- Sistema de Descritores Morfológicos ---
+        self.descriptors_list = []  # Lista para acumular descritores de todas as imagens
+        
         # Parâmetros ajustáveis para cada filtro
         self.filter_params = {
             'clahe_clip_limit': 2.0,  # CLAHE: 0.5 - 10.0
@@ -138,6 +142,8 @@ class AlzheimerApp:
             'bilateral_sigma': 75,     # Bilateral: 10 - 150
             'canny_low': 50,           # Canny: 0 - 255
             'canny_high': 150,         # Canny: 0 - 255
+            'erosion_kernel': 3,       # Erosão: 3, 5, 7, 9
+            'erosion_iterations': 1,   # Erosão: 1 - 10
         }
         
         # Configura a fonte padrão
@@ -292,6 +298,8 @@ class AlzheimerApp:
                        variable=self.filter_mode, value="median").pack(anchor=tk.W, padx=20)
         ttk.Radiobutton(rb_filter_frame, text="Bilateral Filter", 
                        variable=self.filter_mode, value="bilateral").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="Erosão (Morphology)", 
+                       variable=self.filter_mode, value="erosion").pack(anchor=tk.W, padx=20)
         
         # --- Parâmetros de Filtros ---
         ttk.Label(self.section1_frame, text="⚙️ Parâmetros do Filtro:", foreground="blue").pack(pady=(10,2))
@@ -371,6 +379,23 @@ class AlzheimerApp:
                                                command=self.update_bilateral_sigma, length=150)
         self.slider_bilateral_sigma.set(75)
         self.slider_bilateral_sigma.grid(row=7, column=2, padx=5)
+        
+        # Erosão
+        ttk.Label(params_frame, text="Erosão Kernel:", font=("Arial", 8)).grid(row=8, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_erosion_kernel = ttk.Label(params_frame, text="3", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_erosion_kernel.grid(row=8, column=1, padx=5)
+        self.slider_erosion_kernel = ttk.Scale(params_frame, from_=3, to=9, orient=tk.HORIZONTAL,
+                                              command=self.update_erosion_kernel, length=150)
+        self.slider_erosion_kernel.set(3)
+        self.slider_erosion_kernel.grid(row=8, column=2, padx=5)
+        
+        ttk.Label(params_frame, text="Erosão Iterações:", font=("Arial", 8)).grid(row=9, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_erosion_iterations = ttk.Label(params_frame, text="1", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_erosion_iterations.grid(row=9, column=1, padx=5)
+        self.slider_erosion_iterations = ttk.Scale(params_frame, from_=1, to=10, orient=tk.HORIZONTAL,
+                                                   command=self.update_erosion_iterations, length=150)
+        self.slider_erosion_iterations.set(1)
+        self.slider_erosion_iterations.grid(row=9, column=2, padx=5)
         
         # --- Botões de Filtros ---
         filter_buttons = ttk.Frame(self.section1_frame)
@@ -900,6 +925,18 @@ class AlzheimerApp:
         sigma = int(float(value))
         self.filter_params['bilateral_sigma'] = sigma
         self.lbl_bilateral_sigma.config(text=str(sigma))
+    
+    def update_erosion_kernel(self, value):
+        kernel = int(float(value))
+        if kernel % 2 == 0:
+            kernel += 1
+        self.filter_params['erosion_kernel'] = kernel
+        self.lbl_erosion_kernel.config(text=str(kernel))
+    
+    def update_erosion_iterations(self, value):
+        iterations = int(float(value))
+        self.filter_params['erosion_iterations'] = iterations
+        self.lbl_erosion_iterations.config(text=str(iterations))
 
     def zoom_image(self, event, canvas_type):
         """Controle de zoom"""
@@ -1279,6 +1316,16 @@ class AlzheimerApp:
             filter_name = f"Bilateral(d={d}, σ={sigma})"
             self.log(f"   ✓ Params: d={d}, sigma={sigma}")
         
+        elif filter_type == "erosion":
+            kernel_size = params['erosion_kernel']
+            iterations = params['erosion_iterations']
+            # Cria kernel morfológico
+            kernel = np.ones((kernel_size, kernel_size), np.uint8)
+            # Aplica erosão
+            img_filtered = cv2.erode(img_np, kernel, iterations=iterations)
+            filter_name = f"Erosão(k={kernel_size}, iter={iterations})"
+            self.log(f"   ✓ Params: kernel={kernel_size}x{kernel_size}, iterations={iterations}")
+        
         else:
             self.log(f"   ⚠ Filtro desconhecido: {filter_type}")
             return
@@ -1456,7 +1503,8 @@ class AlzheimerApp:
             "Bilateral Filter": "bilateral",
             "Canny": "canny",
             "Otsu": "otsu",
-            "Otsu + CLAHE": "otsu_clahe"
+            "Otsu + CLAHE": "otsu_clahe",
+            "Erosão": "erosion"
         }
         
         ttk.Label(filter_select_frame, text="Filtro:").pack(side=tk.LEFT, padx=5)
@@ -1519,7 +1567,7 @@ class AlzheimerApp:
         self.batch_seed_list.pack(fill=tk.X, pady=5)
         
         # Seeds padrão
-        self.batch_seeds = [(164, 91), (171, 114)]
+        self.batch_seeds = [(158,98),(109,124),(109,81)]
         self.update_seed_list()
         
         btn_clear_seeds = ttk.Button(seed_frame, text="🗑️ Limpar Seeds", 
@@ -1821,6 +1869,9 @@ class AlzheimerApp:
 
     def run_custom_batch_processing(self, input_folder, output_folder, nii_files):
         """Executa o processamento em lote com configurações personalizadas."""
+        # Limpa lista de descritores para novo processamento
+        self.descriptors_list = []
+        
         self.log("\n" + "="*80)
         self.log("📁 PROCESSAMENTO EM LOTE - CONFIGURAÇÃO PERSONALIZADA")
         self.log("="*80)
@@ -1903,6 +1954,12 @@ class AlzheimerApp:
                         )
                         processed_img = clahe.apply(processed_img)
                         _, processed_img = cv2.threshold(processed_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                    
+                    elif filter_type == "erosion":
+                        kernel_size = params['erosion_kernel']
+                        iterations = params['erosion_iterations']
+                        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+                        processed_img = cv2.erode(processed_img, kernel, iterations=iterations)
                 
                 # SEGMENTAÇÃO MULTI-SEED
                 self.log(f"   🎯 Segmentação com {len(self.batch_seeds)} seeds")
@@ -1979,6 +2036,17 @@ class AlzheimerApp:
                     else:
                         self.log(f"      ⚠️ Método alternativo também excedeu limite ({num_pixels_alt} pixels)")
                 
+                # Extrai descritores morfológicos
+                base_name = os.path.splitext(filename)[0]
+                if filename.endswith('.nii.gz'):
+                    base_name = base_name.replace('.nii', '')
+                
+                self.log(f"   📊 Extraindo descritores morfológicos para: {base_name}")
+                descriptors = self.extrair_descritores_ventriculo(final_mask, image_id=base_name)
+                if descriptors:
+                    self.descriptors_list.append(descriptors)
+                    self.log(f"      ✅ Descritores adicionados (total: {len(self.descriptors_list)})")
+                
                 # CRIA IMAGEM SEGMENTADA COM CONTORNO VERMELHO
                 img_with_contour = cv2.cvtColor(img_data, cv2.COLOR_GRAY2BGR)
                 contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1986,9 +2054,6 @@ class AlzheimerApp:
                 cv2.drawContours(img_with_contour, large_contours, -1, (0, 0, 255), 3)  # Vermelho
                 
                 # SALVA RESULTADOS
-                base_name = os.path.splitext(filename)[0]
-                if filename.endswith('.nii.gz'):
-                    base_name = base_name.replace('.nii', '')
                 
                 # Salva máscara binária
                 mask_filename = f"{base_name}_mask.png"
@@ -2015,6 +2080,12 @@ class AlzheimerApp:
                 self.log(f"   ❌ ERRO: {str(e)}")
                 error_count += 1
         
+        # Salva CSV de descritores
+        if len(self.descriptors_list) > 0:
+            csv_path = self.salvar_descritores_csv(output_dir=output_folder)
+            if csv_path:
+                self.log(f"📄 CSV de descritores salvo: {csv_path}")
+        
         # RELATÓRIO FINAL
         self.log("\n" + "="*80)
         self.log("📊 RELATÓRIO FINAL")
@@ -2022,6 +2093,8 @@ class AlzheimerApp:
         self.log(f"✅ Sucesso: {success_count}/{len(nii_files)}")
         self.log(f"❌ Erros: {error_count}/{len(nii_files)}")
         self.log(f"📂 Resultados salvos em: {output_folder}")
+        if len(self.descriptors_list) > 0:
+            self.log(f"📊 Descritores extraídos: {len(self.descriptors_list)}")
         self.log("="*80 + "\n")
         
         # self.lbl_batch_status.config(
@@ -2085,6 +2158,9 @@ class AlzheimerApp:
             self.log("❌ Processamento cancelado pelo usuário.\n")
             return
         
+        # Limpa lista de descritores para novo processamento
+        self.descriptors_list = []
+        
         # Processa cada arquivo
         success_count = 0
         error_count = 0
@@ -2140,6 +2216,17 @@ class AlzheimerApp:
                 # Pós-processamento morfológico
                 final_mask = self.apply_morphological_postprocessing(combined_mask)
                 
+                # Extrai descritores morfológicos
+                base_name = os.path.splitext(filename)[0]
+                if filename.endswith('.nii.gz'):
+                    base_name = base_name.replace('.nii', '')
+                
+                self.log(f"   📊 Extraindo descritores morfológicos para: {base_name}")
+                descriptors = self.extrair_descritores_ventriculo(final_mask, image_id=base_name)
+                if descriptors:
+                    self.descriptors_list.append(descriptors)
+                    self.log(f"      ✅ Descritores adicionados (total: {len(self.descriptors_list)})")
+                
                 # Cria imagem segmentada com contorno amarelo
                 img_with_contour = cv2.cvtColor(img_data, cv2.COLOR_GRAY2BGR)
                 contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -2147,9 +2234,6 @@ class AlzheimerApp:
                 cv2.drawContours(img_with_contour, large_contours, -1, (0, 0, 255), 3)  # Vermelho vivo
                 
                 # Salva os resultados
-                base_name = os.path.splitext(filename)[0]
-                if filename.endswith('.nii.gz'):
-                    base_name = base_name.replace('.nii', '')
                 
                 # Salva máscara binária
                 mask_filename = f"{base_name}_mask.png"
@@ -2172,6 +2256,12 @@ class AlzheimerApp:
                 self.log(f"   ❌ ERRO: {str(e)}")
                 error_count += 1
         
+        # Salva CSV de descritores
+        if len(self.descriptors_list) > 0:
+            csv_path = self.salvar_descritores_csv(output_dir=output_folder)
+            if csv_path:
+                self.log(f"📄 CSV de descritores salvo: {csv_path}")
+        
         # Relatório final
         self.log("-"*70)
         self.log(f"✅ PROCESSAMENTO EM LOTE CONCLUÍDO!")
@@ -2179,6 +2269,8 @@ class AlzheimerApp:
         self.log(f"   • Sucessos: {success_count}")
         self.log(f"   • Erros: {error_count}")
         self.log(f"   • Pasta de saída: {output_folder}")
+        if len(self.descriptors_list) > 0:
+            self.log(f"   • Descritores extraídos: {len(self.descriptors_list)}")
         self.log("="*70 + "\n")
         
         # self.lbl_batch_status.config(
@@ -2413,6 +2505,14 @@ class AlzheimerApp:
         
         # Armazena máscara
         self.image_mask = final_mask
+        
+        # Extrai descritores morfológicos
+        image_id = os.path.basename(self.image_path) if self.image_path else f"manual_{len(self.descriptors_list)}"
+        self.log(f"\n📊 Extraindo descritores morfológicos para: {image_id}")
+        descriptors = self.extrair_descritores_ventriculo(final_mask, image_id=image_id)
+        if descriptors:
+            self.descriptors_list.append(descriptors)
+            self.log(f"   ✅ Descritores adicionados à lista (total: {len(self.descriptors_list)})")
         
         # Visualiza resultado na janela 3: SEMPRE usa a imagem PRÉ-PROCESSADA (se disponível)
         if self.preprocessed_image is not None:
@@ -2919,7 +3019,7 @@ class AlzheimerApp:
     def test_segmentation_with_current_params(self):
         """
         Testa a segmentação usando os parâmetros ajustáveis atuais.
-        Usa os seeds fixos [(164, 91), (171, 114)] e os parâmetros da interface.
+        Usa os seeds fixos e os parâmetros da interface.
         """
         if self.original_image is None:
             messagebox.showwarning("Aviso", "Por favor, carregue uma imagem primeiro.")
@@ -3112,6 +3212,14 @@ class AlzheimerApp:
         
         self.image_mask = final_mask
 
+        # Extrai descritores morfológicos
+        image_id = os.path.basename(self.image_path) if self.image_path else "imagem_atual"
+        self.log(f"\n📊 Extraindo descritores morfológicos para: {image_id}")
+        descriptors = self.extrair_descritores_ventriculo(final_mask, image_id=image_id)
+        if descriptors:
+            self.descriptors_list.append(descriptors)
+            self.log(f"   ✅ Descritores adicionados à lista (total: {len(self.descriptors_list)})")
+
         # Cria visualização: imagem original em RGB com contorno AMARELO
         img_with_contour = cv2.cvtColor(img_np, cv2.COLOR_GRAY2BGR)
         
@@ -3225,6 +3333,153 @@ class AlzheimerApp:
         except Exception as e:
             self.log(f"Erro ao extrair características: {e}")
             messagebox.showerror("Erro na Extração", f"Erro: {e}")
+
+    def extrair_descritores_ventriculo(self, mask, image_id=None):
+        """
+        Extrai descritores morfológicos do ventrículo segmentado.
+        
+        Args:
+            mask: numpy array 2D binário (0=fundo, 255=região ou 0=fundo, 1=região)
+            image_id: identificador da imagem (nome do arquivo ou índice)
+            
+        Returns:
+            dict: dicionário com os descritores ou None se falhar
+        """
+        try:
+            # Garante que mask seja binária (0/1)
+            if mask.dtype != np.uint8:
+                mask = mask.astype(np.uint8)
+            
+            # Normaliza para 0/1 (não 0/255)
+            if mask.max() > 1:
+                mask = (mask > 127).astype(np.uint8)
+            
+            # Detecta se a máscara está invertida
+            # Se pixels 1 forem a maior parte da imagem, provavelmente está invertido
+            total_pixels = mask.size
+            white_pixels = np.sum(mask == 1)
+            white_ratio = white_pixels / total_pixels
+            
+            if white_ratio > 0.5:
+                # Máscara provavelmente invertida (ventrículo deveria ser menor)
+                mask = 1 - mask
+                self.log(f"   ⚠ Máscara invertida detectada (ratio={white_ratio:.2f}), corrigindo...")
+            
+            # Rotula componentes conectados
+            labeled_mask = measure.label(mask, connectivity=2)
+            regions = measure.regionprops(labeled_mask)
+            
+            if len(regions) == 0:
+                self.log(f"   ⚠ Nenhum componente encontrado na máscara")
+                return None
+            
+            # Seleciona o(s) componente(s) do ventrículo
+            # Se houver mais de um, une todos (ou pega o maior)
+            if len(regions) > 1:
+                # Ordena por área (maior primeiro)
+                regions = sorted(regions, key=lambda r: r.area, reverse=True)
+                # Pega o maior componente (ou pode unir todos se necessário)
+                largest_region = regions[0]
+                self.log(f"   ℹ {len(regions)} componentes encontrados, usando o maior (área={largest_region.area})")
+            else:
+                largest_region = regions[0]
+            
+            # Calcula descritores usando regionprops
+            region = largest_region
+            
+            # 1. Área (A)
+            area = float(region.area)
+            
+            # 2. Perímetro (P)
+            perimeter = float(region.perimeter)
+            
+            # 3. Circularidade (C = 4 * pi * A / P²)
+            if perimeter > 0:
+                circularity = (4 * np.pi * area) / (perimeter ** 2)
+            else:
+                circularity = 0.0
+            
+            # 4. Excentricidade (Ecc)
+            eccentricity = float(region.eccentricity)
+            
+            # 5. Solidez (Solidity = A / convex_area)
+            solidity = float(region.solidity)
+            
+            # 6. Extent (Retangularidade = A / área da bounding box)
+            extent = float(region.extent)
+            
+            # 7. Aspect Ratio (AR = major_axis_length / minor_axis_length)
+            if region.minor_axis_length > 0:
+                aspect_ratio = float(region.major_axis_length / region.minor_axis_length)
+            else:
+                aspect_ratio = 0.0
+            
+            # Cria dicionário com os descritores
+            descriptors = {
+                'id': image_id if image_id is not None else 'unknown',
+                'area': area,
+                'perimeter': perimeter,
+                'circularity': circularity,
+                'eccentricity': eccentricity,
+                'solidity': solidity,
+                'extent': extent,
+                'aspect_ratio': aspect_ratio
+            }
+            
+            # Log dos valores
+            self.log(f"   📊 Descritores extraídos:")
+            self.log(f"      Área: {area:.2f}")
+            self.log(f"      Perímetro: {perimeter:.2f}")
+            self.log(f"      Circularidade: {circularity:.4f}")
+            self.log(f"      Excentricidade: {eccentricity:.4f}")
+            self.log(f"      Solidez: {solidity:.4f}")
+            self.log(f"      Extent: {extent:.4f}")
+            self.log(f"      Aspect Ratio: {aspect_ratio:.4f}")
+            
+            return descriptors
+            
+        except Exception as e:
+            self.log(f"   ❌ Erro ao extrair descritores: {e}")
+            return None
+    
+    def salvar_descritores_csv(self, output_dir=None):
+        """
+        Salva os descritores acumulados em um arquivo CSV.
+        
+        Args:
+            output_dir: diretório de saída (se None, usa diretório raiz)
+        """
+        if len(self.descriptors_list) == 0:
+            self.log("⚠ Nenhum descritor para salvar.")
+            return
+        
+        try:
+            # Cria DataFrame
+            df = pd.DataFrame(self.descriptors_list)
+            
+            # Garante ordem das colunas
+            columns_order = ['id', 'area', 'perimeter', 'circularity', 'eccentricity', 
+                           'solidity', 'extent', 'aspect_ratio']
+            df = df[columns_order]
+            
+            # Define caminho de saída
+            if output_dir is None:
+                output_path = "descritores.csv"
+            else:
+                output_path = os.path.join(output_dir, "descritores.csv")
+            
+            # Salva CSV
+            df.to_csv(output_path, index=False)
+            
+            self.log(f"\n✅ CSV de descritores salvo: {output_path}")
+            self.log(f"   Total de registros: {len(df)}")
+            self.log(f"   Colunas: {', '.join(columns_order)}")
+            
+            return output_path
+            
+        except Exception as e:
+            self.log(f"❌ Erro ao salvar CSV de descritores: {e}")
+            return None
 
     def show_scatterplot(self):
         """ Gera gráficos de dispersão (scatterplots). [cite: 81] """
