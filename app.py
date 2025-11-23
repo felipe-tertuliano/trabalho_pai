@@ -56,6 +56,471 @@ os.environ['KMP_DUPLICATE_LIB_OK']='True'
 ################################################################################
 
 class AlzheimerApp:
+
+    def create_menu(self):
+        """ Cria a barra de menu superior. """
+        menu_bar = tk.Menu(self.root)
+        self.root.config(menu=menu_bar)
+
+        # Menu Arquivo
+        file_menu = tk.Menu(menu_bar, tearoff=0)
+        menu_bar.add_cascade(label="Arquivo", menu=file_menu)
+        file_menu.add_command(label="Carregar CSV", command=self.load_csv)
+        file_menu.add_command(label="Carregar Imagem...", command=self.load_image)
+        file_menu.add_separator()
+        file_menu.add_command(label="Sair", command=self.root.quit)
+
+        # Menu Acessibilidade [cite: 75]
+        help_menu = tk.Menu(menu_bar, tearoff=0)
+        menu_bar.add_cascade(label="Acessibilidade", menu=help_menu)
+        help_menu.add_command(label="Aumentar Fonte", command=self.increase_font)
+        help_menu.add_command(label="Diminuir Fonte", command=self.decrease_font)
+
+        # Menu de Navegação
+        nav_menu = tk.Menu(menu_bar, tearoff=0)
+        menu_bar.add_cascade(label="Navegação", menu=nav_menu)
+        nav_menu.add_command(label="Carregamento", command=lambda: self.show_tab(0))
+        nav_menu.add_command(label="Filtros", command=lambda: self.show_tab(1))
+        nav_menu.add_command(label="Segmentação", command=lambda: self.show_tab(2))
+        nav_menu.add_command(label="Processamento em Lote", command=lambda: self.show_tab(3))
+
+    def show_tab(self, tab_index):
+        """Mostra a aba especificada"""
+        self.notebook.select(tab_index)
+
+    def on_tab_changed(self, event):
+        """Atualiza o título quando a aba muda"""
+        self.notebook.select()
+
+    def setup_tab1(self):
+        """Configura a aba de Carregamento"""
+        # Frame principal com scroll
+        tab1_canvas = tk.Canvas(self.tab1, bg="white")
+        scrollbar = ttk.Scrollbar(self.tab1, orient="vertical", command=tab1_canvas.yview)
+        
+        tab1_frame = ttk.Frame(tab1_canvas)
+        tab1_frame.bind(
+            "<Configure>",
+            lambda e: tab1_canvas.configure(scrollregion=tab1_canvas.bbox("all"))
+        )
+        
+        tab1_canvas.create_window((0, 0), window=tab1_frame, anchor="nw")
+        tab1_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        tab1_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Bind mouse wheel para scroll
+        def _on_mousewheel(event):
+            tab1_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        tab1_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # Conteúdo da aba 1
+        ttk.Label(tab1_frame, text="📁 CARREGAMENTO DE DADOS", 
+                font=("Arial", 12, "bold"), foreground="darkblue").pack(pady=10)
+        
+        # Status do CSV
+        self.lbl_csv_status = ttk.Label(tab1_frame, text="CSV não carregado", foreground="red")
+        self.lbl_csv_status.pack(pady=5, fill=tk.X)
+        
+        # Botões de carregamento
+        btn_load_csv = ttk.Button(tab1_frame, text="Carregar CSV", command=self.load_csv)
+        btn_load_csv.pack(pady=5, fill=tk.X)
+        
+        btn_load_image = ttk.Button(tab1_frame, text="Carregar Imagem", command=self.load_image)
+        btn_load_image.pack(pady=5, fill=tk.X)
+        
+        # Controles de Zoom
+        ttk.Separator(tab1_frame, orient='horizontal').pack(pady=10, fill=tk.X)
+        ttk.Label(tab1_frame, text="🔍 CONTROLES DE ZOOM", 
+                font=("Arial", 10, "bold"), foreground="darkgreen").pack(pady=5)
+        
+        zoom_frame = ttk.Frame(tab1_frame)
+        zoom_frame.pack(pady=5, fill=tk.X)
+        
+        btn_reset_original = ttk.Button(zoom_frame, text="↻ Original", 
+                                    command=lambda: self.reset_zoom("original"))
+        btn_reset_original.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        
+        btn_reset_preprocessed = ttk.Button(zoom_frame, text="↻ Pré-processada", 
+                                        command=lambda: self.reset_zoom("preprocessed"))
+        btn_reset_preprocessed.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        
+        btn_reset_segmented = ttk.Button(zoom_frame, text="↻ Segmentada", 
+                                        command=lambda: self.reset_zoom("segmented"))
+        btn_reset_segmented.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        
+        # Coordenadas do mouse
+        ttk.Separator(tab1_frame, orient='horizontal').pack(pady=10, fill=tk.X)
+        self.lbl_mouse_coords = ttk.Label(tab1_frame, text="🖱️ Mouse: X: -- | Y: --", 
+                                        foreground="darkblue", font=("Courier", 9))
+        self.lbl_mouse_coords.pack(pady=5)
+
+    def setup_tab2(self):
+        """Configura a aba de Filtros"""
+        # Frame principal com scroll
+        tab2_canvas = tk.Canvas(self.tab2, bg="white")
+        scrollbar = ttk.Scrollbar(self.tab2, orient="vertical", command=tab2_canvas.yview)
+        
+        tab2_frame = ttk.Frame(tab2_canvas)
+        tab2_frame.bind(
+            "<Configure>",
+            lambda e: tab2_canvas.configure(scrollregion=tab2_canvas.bbox("all"))
+        )
+        
+        tab2_canvas.create_window((0, 0), window=tab2_frame, anchor="nw")
+        tab2_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        tab2_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Bind mouse wheel para scroll
+        def _on_mousewheel(event):
+            tab2_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        tab2_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # Conteúdo da aba 2 (todo o conteúdo original da SEÇÃO 1: FILTROS)
+        ttk.Label(tab2_frame, text="🔧 FILTROS DE PRÉ-PROCESSAMENTO", 
+                font=("Arial", 12, "bold"), foreground="darkgreen").pack(pady=10)
+        
+        ttk.Label(tab2_frame, text="Escolha o filtro a aplicar:", 
+                foreground="blue", wraplength=340).pack(pady=(2,0), padx=5)
+        
+        # Variável para armazenar o filtro selecionado
+        self.filter_mode = tk.StringVar(value="otsu_clahe")
+        
+        # Opções de filtros
+        rb_filter_frame = ttk.Frame(tab2_frame)
+        rb_filter_frame.pack(pady=5, fill=tk.X)
+        
+        ttk.Radiobutton(rb_filter_frame, text="Otsu + CLAHE", 
+                    variable=self.filter_mode, value="otsu_clahe").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="CLAHE (Equalização)", 
+                    variable=self.filter_mode, value="clahe").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="Otsu (Binarização)", 
+                    variable=self.filter_mode, value="otsu").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="Canny (Bordas)", 
+                    variable=self.filter_mode, value="canny").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="Gaussian Blur", 
+                    variable=self.filter_mode, value="gaussian").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="Median Filter", 
+                    variable=self.filter_mode, value="median").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="Bilateral Filter", 
+                    variable=self.filter_mode, value="bilateral").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(rb_filter_frame, text="Erosão (Morphology)", 
+                    variable=self.filter_mode, value="erosion").pack(anchor=tk.W, padx=20)
+        
+        # --- Parâmetros de Filtros ---
+        ttk.Label(tab2_frame, text="⚙️ Parâmetros do Filtro:", foreground="blue").pack(pady=(10,2))
+        
+        # Frame com scroll para parâmetros
+        params_canvas = tk.Canvas(tab2_frame, height=120, bg="white")
+        params_canvas.pack(fill=tk.X, pady=5)
+        
+        params_frame = ttk.Frame(params_canvas)
+        params_canvas.create_window((0, 0), window=params_frame, anchor=tk.NW)
+        
+        # CLAHE
+        ttk.Label(params_frame, text="CLAHE Clip Limit:", font=("Arial", 8)).grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_clahe_clip = ttk.Label(params_frame, text="2.0", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_clahe_clip.grid(row=0, column=1, padx=5)
+        self.slider_clahe_clip = ttk.Scale(params_frame, from_=0.5, to=10.0, orient=tk.HORIZONTAL, 
+                                        command=self.update_clahe_clip, length=150)
+        self.slider_clahe_clip.set(2.0)
+        self.slider_clahe_clip.grid(row=0, column=2, padx=5)
+        
+        ttk.Label(params_frame, text="CLAHE Grid Size:", font=("Arial", 8)).grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_clahe_grid = ttk.Label(params_frame, text="8", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_clahe_grid.grid(row=1, column=1, padx=5)
+        self.slider_clahe_grid = ttk.Scale(params_frame, from_=4, to=16, orient=tk.HORIZONTAL,
+                                        command=self.update_clahe_grid, length=150)
+        self.slider_clahe_grid.set(8)
+        self.slider_clahe_grid.grid(row=1, column=2, padx=5)
+        
+        # Gaussian
+        ttk.Label(params_frame, text="Gaussian Kernel:", font=("Arial", 8)).grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_gaussian = ttk.Label(params_frame, text="5", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_gaussian.grid(row=2, column=1, padx=5)
+        self.slider_gaussian = ttk.Scale(params_frame, from_=3, to=15, orient=tk.HORIZONTAL,
+                                        command=self.update_gaussian, length=150)
+        self.slider_gaussian.set(5)
+        self.slider_gaussian.grid(row=2, column=2, padx=5)
+        
+        # Median
+        ttk.Label(params_frame, text="Median Kernel:", font=("Arial", 8)).grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_median = ttk.Label(params_frame, text="5", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_median.grid(row=3, column=1, padx=5)
+        self.slider_median = ttk.Scale(params_frame, from_=3, to=15, orient=tk.HORIZONTAL,
+                                    command=self.update_median, length=150)
+        self.slider_median.set(5)
+        self.slider_median.grid(row=3, column=2, padx=5)
+        
+        # Canny
+        ttk.Label(params_frame, text="Canny Low:", font=("Arial", 8)).grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_canny_low = ttk.Label(params_frame, text="50", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_canny_low.grid(row=4, column=1, padx=5)
+        self.slider_canny_low = ttk.Scale(params_frame, from_=0, to=255, orient=tk.HORIZONTAL,
+                                        command=self.update_canny_low, length=150)
+        self.slider_canny_low.set(50)
+        self.slider_canny_low.grid(row=4, column=2, padx=5)
+        
+        ttk.Label(params_frame, text="Canny High:", font=("Arial", 8)).grid(row=5, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_canny_high = ttk.Label(params_frame, text="150", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_canny_high.grid(row=5, column=1, padx=5)
+        self.slider_canny_high = ttk.Scale(params_frame, from_=0, to=255, orient=tk.HORIZONTAL,
+                                        command=self.update_canny_high, length=150)
+        self.slider_canny_high.set(150)
+        self.slider_canny_high.grid(row=5, column=2, padx=5)
+        
+        # Bilateral
+        ttk.Label(params_frame, text="Bilateral d:", font=("Arial", 8)).grid(row=6, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_bilateral_d = ttk.Label(params_frame, text="9", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_bilateral_d.grid(row=6, column=1, padx=5)
+        self.slider_bilateral_d = ttk.Scale(params_frame, from_=5, to=15, orient=tk.HORIZONTAL,
+                                        command=self.update_bilateral_d, length=150)
+        self.slider_bilateral_d.set(9)
+        self.slider_bilateral_d.grid(row=6, column=2, padx=5)
+        
+        ttk.Label(params_frame, text="Bilateral Sigma:", font=("Arial", 8)).grid(row=7, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_bilateral_sigma = ttk.Label(params_frame, text="75", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_bilateral_sigma.grid(row=7, column=1, padx=5)
+        self.slider_bilateral_sigma = ttk.Scale(params_frame, from_=10, to=150, orient=tk.HORIZONTAL,
+                                            command=self.update_bilateral_sigma, length=150)
+        self.slider_bilateral_sigma.set(75)
+        self.slider_bilateral_sigma.grid(row=7, column=2, padx=5)
+        
+        # Erosão
+        ttk.Label(params_frame, text="Erosão Kernel:", font=("Arial", 8)).grid(row=8, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_erosion_kernel = ttk.Label(params_frame, text="3", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_erosion_kernel.grid(row=8, column=1, padx=5)
+        self.slider_erosion_kernel = ttk.Scale(params_frame, from_=3, to=9, orient=tk.HORIZONTAL,
+                                            command=self.update_erosion_kernel, length=150)
+        self.slider_erosion_kernel.set(3)
+        self.slider_erosion_kernel.grid(row=8, column=2, padx=5)
+        
+        ttk.Label(params_frame, text="Erosão Iterações:", font=("Arial", 8)).grid(row=9, column=0, sticky=tk.W, padx=5, pady=2)
+        self.lbl_erosion_iterations = ttk.Label(params_frame, text="1", foreground="blue", font=("Arial", 8, "bold"))
+        self.lbl_erosion_iterations.grid(row=9, column=1, padx=5)
+        self.slider_erosion_iterations = ttk.Scale(params_frame, from_=1, to=10, orient=tk.HORIZONTAL,
+                                                command=self.update_erosion_iterations, length=150)
+        self.slider_erosion_iterations.set(1)
+        self.slider_erosion_iterations.grid(row=9, column=2, padx=5)
+        
+        # --- Botões de Filtros ---
+        filter_buttons = ttk.Frame(tab2_frame)
+        filter_buttons.pack(pady=5, fill=tk.X)
+        
+        btn_apply_filter = ttk.Button(filter_buttons, text="✅ Aplicar Filtro", 
+                                    command=self.apply_selected_filter)
+        btn_apply_filter.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        
+        btn_reset_filters = ttk.Button(filter_buttons, text="↻ Reset", 
+                                    command=self.reset_filters)
+        btn_reset_filters.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        
+        # Histórico de filtros
+        ttk.Label(tab2_frame, text="📜 Filtros Aplicados:", foreground="blue", font=("Arial", 8)).pack(pady=(5,0))
+        
+        self.lbl_filter_history = ttk.Label(tab2_frame, text="Nenhum", 
+                                            foreground="gray", font=("Arial", 7), wraplength=340)
+        self.lbl_filter_history.pack(pady=2)
+        
+        self.lbl_current_filter = ttk.Label(tab2_frame, text="Status: Original", 
+                                            foreground="green", font=("Arial", 8))
+        self.lbl_current_filter.pack(pady=2)
+
+    def setup_tab3(self):
+        """Configura a aba de Segmentação"""
+        # Frame principal com scroll
+        tab3_canvas = tk.Canvas(self.tab3, bg="white")
+        scrollbar = ttk.Scrollbar(self.tab3, orient="vertical", command=tab3_canvas.yview)
+        
+        tab3_frame = ttk.Frame(tab3_canvas)
+        tab3_frame.bind(
+            "<Configure>",
+            lambda e: tab3_canvas.configure(scrollregion=tab3_canvas.bbox("all"))
+        )
+        
+        tab3_canvas.create_window((0, 0), window=tab3_frame, anchor="nw")
+        tab3_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        tab3_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Bind mouse wheel para scroll
+        def _on_mousewheel(event):
+            tab3_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        tab3_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # Conteúdo da aba 3 (todo o conteúdo original da SEÇÃO 2: SEGMENTAÇÃO)
+        ttk.Label(tab3_frame, text="✂️ SEGMENTAÇÃO DE VENTRÍCULOS", 
+                font=("Arial", 12, "bold"), foreground="darkblue").pack(pady=10)
+        
+        # Informação sobre qual imagem é usada
+        info_frame = ttk.Frame(tab3_frame)
+        info_frame.pack(pady=(5,10), fill=tk.X)
+        ttk.Label(info_frame, text="ℹ️ A segmentação SEMPRE usa a Janela 2 (Pré-processada)", 
+                foreground="darkblue", font=("Arial", 8, "italic"), wraplength=340).pack(padx=5)
+        
+        ttk.Label(tab3_frame, text="⚙️ Parâmetros de Segmentação:", foreground="blue", font=("Arial", 9, "bold")).pack(pady=(5,5))
+        
+        # Threshold do Region Growing
+        threshold_frame = ttk.Frame(tab3_frame)
+        threshold_frame.pack(pady=5, fill=tk.X)
+        ttk.Label(threshold_frame, text="Threshold Region Growing:").pack(side=tk.LEFT)
+        self.lbl_threshold = ttk.Label(threshold_frame, text="50", foreground="red", font=("Arial", 9, "bold"))
+        self.lbl_threshold.pack(side=tk.LEFT, padx=5)
+        
+        self.slider_threshold = ttk.Scale(tab3_frame, from_=5, to=100, orient=tk.HORIZONTAL,
+                                        command=self.update_threshold)
+        self.slider_threshold.set(50)
+        self.slider_threshold.pack(fill=tk.X, padx=10)
+        
+        # Conectividade do Region Growing
+        connectivity_frame = ttk.Frame(tab3_frame)
+        connectivity_frame.pack(pady=5, fill=tk.X)
+        ttk.Label(connectivity_frame, text="Conectividade:", foreground="blue").pack(side=tk.LEFT, padx=5)
+        
+        self.connectivity_var = tk.IntVar(value=8)
+        ttk.Radiobutton(connectivity_frame, text="4-vizinhos (↑↓←→)", 
+                    variable=self.connectivity_var, value=4).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(connectivity_frame, text="8-vizinhos (↑↓←→↖↗↙↘)", 
+                    variable=self.connectivity_var, value=8).pack(side=tk.LEFT, padx=5)
+        
+        # Kernel Morfológico
+        kernel_frame = ttk.Frame(tab3_frame)
+        kernel_frame.pack(pady=5, fill=tk.X)
+        ttk.Label(kernel_frame, text="Kernel Morfológico:").pack(side=tk.LEFT)
+        self.lbl_kernel = ttk.Label(kernel_frame, text="15x15", foreground="red", font=("Arial", 9, "bold"))
+        self.lbl_kernel.pack(side=tk.LEFT, padx=5)
+        
+        self.slider_kernel = ttk.Scale(tab3_frame, from_=3, to=25, orient=tk.HORIZONTAL,
+                                    command=self.update_kernel)
+        self.slider_kernel.set(15)
+        self.slider_kernel.pack(fill=tk.X, padx=10)
+        
+        # Operações Morfológicas
+        ttk.Label(tab3_frame, text="Operações Morfológicas:", foreground="blue").pack(pady=(10,5))
+        
+        self.var_opening = tk.BooleanVar(value=True)
+        chk_opening = ttk.Checkbutton(tab3_frame, text="🔹 Abertura (remover ruído)", 
+                                    variable=self.var_opening, command=self.update_morphology_flags)
+        chk_opening.pack(anchor=tk.W, padx=20)
+        
+        self.var_closing = tk.BooleanVar(value=False)
+        chk_closing = ttk.Checkbutton(tab3_frame, text="🔹 Fechamento (fechar gaps)", 
+                                    variable=self.var_closing, command=self.update_morphology_flags)
+        chk_closing.pack(anchor=tk.W, padx=20)
+        
+        self.var_fill_holes = tk.BooleanVar(value=True)
+        chk_fill_holes = ttk.Checkbutton(tab3_frame, text="🔹 Preencher buracos", 
+                                        variable=self.var_fill_holes, command=self.update_morphology_flags)
+        chk_fill_holes.pack(anchor=tk.W, padx=20)
+        
+        self.var_smooth = tk.BooleanVar(value=True)
+        chk_smooth = ttk.Checkbutton(tab3_frame, text="🔹 Suavizar contornos", 
+                                    variable=self.var_smooth, command=self.update_morphology_flags)
+        chk_smooth.pack(anchor=tk.W, padx=20)
+        
+        ttk.Separator(tab3_frame, orient='horizontal').pack(pady=10, fill=tk.X)
+        
+        # Opções de Segmentação
+        ttk.Label(tab3_frame, text="Métodos de Segmentação:", foreground="blue", 
+                font=("Arial", 9, "bold")).pack(pady=(5,5))
+        
+        # Método de segmentação
+        self.segmentation_method = tk.StringVar(value="region_growing")
+        
+        ttk.Radiobutton(tab3_frame, text="🌱 Region Growing (clique para seed)", 
+                    variable=self.segmentation_method, value="region_growing").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(tab3_frame, text="🎯 Watershed", 
+                    variable=self.segmentation_method, value="watershed").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(tab3_frame, text="🔲 Thresholding Adaptativo", 
+                    variable=self.segmentation_method, value="adaptive_threshold").pack(anchor=tk.W, padx=20)
+        ttk.Radiobutton(tab3_frame, text="🧲 K-Means Clustering", 
+                    variable=self.segmentation_method, value="kmeans").pack(anchor=tk.W, padx=20)
+        
+        # Edição de Seeds Fixos
+        seeds_edit_frame = ttk.LabelFrame(tab3_frame, text="📍 Seeds Fixos (Editáveis)", padding="5")
+        seeds_edit_frame.pack(pady=(10,5), fill=tk.X)
+        
+        # Lista de seeds
+        seeds_list_frame = ttk.Frame(seeds_edit_frame)
+        seeds_list_frame.pack(fill=tk.X, pady=2)
+        
+        self.auto_seeds_listbox = tk.Listbox(seeds_list_frame, height=3, font=("Courier", 9))
+        self.auto_seeds_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,5))
+        self.update_auto_seeds_display()
+        
+        # Botões de edição
+        seeds_buttons_frame = ttk.Frame(seeds_edit_frame)
+        seeds_buttons_frame.pack(fill=tk.X, pady=2)
+        
+        # Adicionar seed
+        add_seed_frame = ttk.Frame(seeds_buttons_frame)
+        add_seed_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(add_seed_frame, text="X:").pack(side=tk.LEFT, padx=2)
+        self.auto_seed_x_entry = ttk.Entry(add_seed_frame, width=6)
+        self.auto_seed_x_entry.pack(side=tk.LEFT, padx=2)
+        ttk.Label(add_seed_frame, text="Y:").pack(side=tk.LEFT, padx=2)
+        self.auto_seed_y_entry = ttk.Entry(add_seed_frame, width=6)
+        self.auto_seed_y_entry.pack(side=tk.LEFT, padx=2)
+        ttk.Button(add_seed_frame, text="➕ Adicionar", 
+                command=self.add_auto_seed, width=12).pack(side=tk.LEFT, padx=5)
+        
+        # Remover seed selecionado
+        ttk.Button(seeds_buttons_frame, text="➖ Remover Selecionado", 
+                command=self.remove_auto_seed).pack(pady=2, fill=tk.X)
+        
+        # Botões de Segmentação
+        ttk.Label(tab3_frame, text="Executar Segmentação:", foreground="blue").pack(pady=(10,2))
+        
+        btn_segment_auto = ttk.Button(tab3_frame, text="▶ Segmentação Automática (Seeds Fixos)", 
+                                    command=self.segment_ventricles)
+        btn_segment_auto.pack(pady=2, fill=tk.X)
+        
+        btn_multi_segment = ttk.Button(tab3_frame, text="🖱️ Modo Multi-Seed (Clique nas Janelas)", 
+                                    command=self.toggle_multi_seed_mode)
+        btn_multi_segment.pack(pady=2, fill=tk.X)
+        
+        self.lbl_multi_seed = ttk.Label(tab3_frame, text="Multi-Seed: Inativo", foreground="gray", 
+                                        font=("Arial", 8))
+        self.lbl_multi_seed.pack(pady=2)
+        
+        self.lbl_segment_status = ttk.Label(tab3_frame, text="Segmentação: Aguardando...", 
+                                            foreground="gray", font=("Arial", 8))
+        self.lbl_segment_status.pack(pady=2)
+
+    def setup_tab4(self):
+        """Configura a aba de Processamento em Lote"""
+        # Frame principal
+        tab4_frame = ttk.Frame(self.tab4)
+        tab4_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        ttk.Label(tab4_frame, text="📁 PROCESSAMENTO EM LOTE", 
+                font=("Arial", 12, "bold"), foreground="darkorange").pack(pady=10)
+        
+        # Botão principal para abrir configuração
+        btn_batch_config = ttk.Button(tab4_frame, text="⚙️ Configurar e Processar Pasta", 
+                                    command=self.open_batch_config_window)
+        btn_batch_config.pack(pady=20, fill=tk.X)
+        
+        ttk.Label(tab4_frame, text="Configure filtros, seeds e processe múltiplos arquivos", 
+                foreground="gray", font=("Arial", 10)).pack(pady=10)
+        
+        # Informações adicionais
+        info_frame = ttk.LabelFrame(tab4_frame, text="ℹ️ Informações", padding="10")
+        info_frame.pack(fill=tk.X, pady=10)
+        
+        info_text = """O processamento em lote permite:
+        • Processar todas as imagens de uma pasta
+        • Aplicar os mesmos filtros e parâmetros
+        • Usar seeds fixos ou automáticos
+        • Gerar relatório consolidado
+        • Exportar características extraídas"""
+        
+        ttk.Label(info_frame, text=info_text, justify=tk.LEFT, font=("Arial", 9)).pack(anchor=tk.W)
+
     def __init__(self, root):
         self.root = root
         self.root.title("Trabalho Prático - Diagnóstico de Alzheimer")
@@ -150,20 +615,15 @@ class AlzheimerApp:
         self.default_font = font.nametofont("TkDefaultFont")
         self.default_font.configure(size=self.current_font_size)
         
-        # --- Layout Principal ---
-        # Menu Superior
+        # --- Menu Superior com Abas ---
         self.create_menu()
         
-        # Frame Principal
+        # --- Layout Principal ---
         main_frame = ttk.Frame(root, padding="10")
         main_frame.pack(expand=True, fill=tk.BOTH)
         
-        # Frame Superior: Grid de Imagens (2 colunas: imagens + controles)
-        images_and_controls_frame = ttk.Frame(main_frame)
-        images_and_controls_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        
-        # Frame de Imagens (à esquerda)
-        images_container = ttk.Frame(images_and_controls_frame)
+        # --- Grid de Imagens ---
+        images_container = ttk.Frame(main_frame)
         images_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2, pady=2)
         
         # LINHA 1: Original e Com Filtro lado a lado
@@ -196,415 +656,57 @@ class AlzheimerApp:
         segmented_frame = ttk.Frame(bottom_row_frame, relief=tk.RIDGE, padding="2")
         segmented_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.lbl_image_segmented = ttk.Label(segmented_frame, text="✂️ Segmentada (Contorno Vermelho)", 
-                                             font=("Arial", 9, "bold"), foreground="red")
+                                            font=("Arial", 9, "bold"), foreground="red")
         self.lbl_image_segmented.pack(pady=1)
         self.canvas_segmented = tk.Canvas(segmented_frame, bg="gray", height=250)
         self.canvas_segmented.pack(fill=tk.BOTH, expand=True)
         
-        # Frame de Controle e Log (à direita) com SCROLL
-        control_container = ttk.Frame(images_and_controls_frame, width=380)
-        control_container.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
-        control_container.pack_propagate(False)  # Força o tamanho fixo
-        
-        # Canvas para scroll
-        control_canvas = tk.Canvas(control_container, width=360)
-        scrollbar = ttk.Scrollbar(control_container, orient="vertical", command=control_canvas.yview)
-        
-        # Frame que vai conter todos os controles
-        control_frame = ttk.Frame(control_canvas)
-        
-        # Configuração do scroll
-        control_frame.bind(
-            "<Configure>",
-            lambda e: control_canvas.configure(scrollregion=control_canvas.bbox("all"))
-        )
-        
-        control_canvas.create_window((0, 0), window=control_frame, anchor="nw")
-        control_canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Pack canvas e scrollbar
-        control_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Bind mouse wheel para scroll
-        def _on_mousewheel(event):
-            control_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        
-        control_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        
-        self.lbl_csv_status = ttk.Label(control_frame, text="CSV não carregado", foreground="red")
-        self.lbl_csv_status.pack(pady=5, fill=tk.X)
-        
-        btn_load_csv = ttk.Button(control_frame, text="Carregar CSV", command=self.load_csv)
-        btn_load_csv.pack(pady=5, fill=tk.X)
-        
-        btn_load_image = ttk.Button(control_frame, text="Carregar Imagem", command=self.load_image)
-        btn_load_image.pack(pady=5, fill=tk.X)
-        
-        # Frame de botões de zoom em grid
-        zoom_frame = ttk.Frame(control_frame)
-        zoom_frame.pack(pady=5, fill=tk.X)
-        btn_reset_original = ttk.Button(zoom_frame, text="↻ Orig", command=lambda: self.reset_zoom("original"))
-        btn_reset_original.pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
-        btn_reset_preprocessed = ttk.Button(zoom_frame, text="↻ Prep", command=lambda: self.reset_zoom("preprocessed"))
-        btn_reset_preprocessed.pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
-        btn_reset_segmented = ttk.Button(zoom_frame, text="↻ Seg", command=lambda: self.reset_zoom("segmented"))
-        btn_reset_segmented.pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
-        
-        # Label para coordenadas do mouse
-        self.lbl_mouse_coords = ttk.Label(control_frame, text="🖱️ Mouse: X: -- | Y: --", 
-                                          foreground="darkblue", font=("Courier", 9))
-        self.lbl_mouse_coords.pack(pady=5)
-        
-        # Separador
-        ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
-        
-        # ═══════════════════════════════════════════════════════════
-        # SEÇÃO 1: FILTROS DE PRÉ-PROCESSAMENTO
-        # ═══════════════════════════════════════════════════════════
-        
-        # Header da seção 1
-        section1_header = ttk.Frame(control_frame)
-        section1_header.pack(fill=tk.X, pady=(5,0))
-        
-        ttk.Label(section1_header, text="🔧 SEÇÃO 1: FILTROS", 
-                  font=("Arial", 11, "bold"), foreground="darkgreen").pack(side=tk.LEFT, padx=5)
-        
-        # Frame da seção 1
-        self.section1_frame = ttk.Frame(control_frame)
-        self.section1_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(self.section1_frame, text="Escolha o filtro a aplicar:", 
-                  foreground="blue", wraplength=340).pack(pady=(2,0), padx=5)
-        
-        # Variável para armazenar o filtro selecionado
-        self.filter_mode = tk.StringVar(value="otsu_clahe")
-        
-        # Opções de filtros
-        rb_filter_frame = ttk.Frame(self.section1_frame)
-        rb_filter_frame.pack(pady=5, fill=tk.X)
-        
-        ttk.Radiobutton(rb_filter_frame, text="Otsu + CLAHE", 
-                       variable=self.filter_mode, value="otsu_clahe").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(rb_filter_frame, text="CLAHE (Equalização)", 
-                       variable=self.filter_mode, value="clahe").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(rb_filter_frame, text="Otsu (Binarização)", 
-                       variable=self.filter_mode, value="otsu").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(rb_filter_frame, text="Canny (Bordas)", 
-                       variable=self.filter_mode, value="canny").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(rb_filter_frame, text="Gaussian Blur", 
-                       variable=self.filter_mode, value="gaussian").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(rb_filter_frame, text="Median Filter", 
-                       variable=self.filter_mode, value="median").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(rb_filter_frame, text="Bilateral Filter", 
-                       variable=self.filter_mode, value="bilateral").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(rb_filter_frame, text="Erosão (Morphology)", 
-                       variable=self.filter_mode, value="erosion").pack(anchor=tk.W, padx=20)
-        
-        # --- Parâmetros de Filtros ---
-        ttk.Label(self.section1_frame, text="⚙️ Parâmetros do Filtro:", foreground="blue").pack(pady=(10,2))
-        
-        # Frame com scroll para parâmetros
-        params_canvas = tk.Canvas(self.section1_frame, height=120, bg="white")
-        params_canvas.pack(fill=tk.X, pady=5)
-        
-        params_frame = ttk.Frame(params_canvas)
-        params_canvas.create_window((0, 0), window=params_frame, anchor=tk.NW)
-        
-        # CLAHE
-        ttk.Label(params_frame, text="CLAHE Clip Limit:", font=("Arial", 8)).grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_clahe_clip = ttk.Label(params_frame, text="2.0", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_clahe_clip.grid(row=0, column=1, padx=5)
-        self.slider_clahe_clip = ttk.Scale(params_frame, from_=0.5, to=10.0, orient=tk.HORIZONTAL, 
-                                           command=self.update_clahe_clip, length=150)
-        self.slider_clahe_clip.set(2.0)
-        self.slider_clahe_clip.grid(row=0, column=2, padx=5)
-        
-        ttk.Label(params_frame, text="CLAHE Grid Size:", font=("Arial", 8)).grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_clahe_grid = ttk.Label(params_frame, text="8", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_clahe_grid.grid(row=1, column=1, padx=5)
-        self.slider_clahe_grid = ttk.Scale(params_frame, from_=4, to=16, orient=tk.HORIZONTAL,
-                                           command=self.update_clahe_grid, length=150)
-        self.slider_clahe_grid.set(8)
-        self.slider_clahe_grid.grid(row=1, column=2, padx=5)
-        
-        # Gaussian
-        ttk.Label(params_frame, text="Gaussian Kernel:", font=("Arial", 8)).grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_gaussian = ttk.Label(params_frame, text="5", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_gaussian.grid(row=2, column=1, padx=5)
-        self.slider_gaussian = ttk.Scale(params_frame, from_=3, to=15, orient=tk.HORIZONTAL,
-                                        command=self.update_gaussian, length=150)
-        self.slider_gaussian.set(5)
-        self.slider_gaussian.grid(row=2, column=2, padx=5)
-        
-        # Median
-        ttk.Label(params_frame, text="Median Kernel:", font=("Arial", 8)).grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_median = ttk.Label(params_frame, text="5", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_median.grid(row=3, column=1, padx=5)
-        self.slider_median = ttk.Scale(params_frame, from_=3, to=15, orient=tk.HORIZONTAL,
-                                      command=self.update_median, length=150)
-        self.slider_median.set(5)
-        self.slider_median.grid(row=3, column=2, padx=5)
-        
-        # Canny
-        ttk.Label(params_frame, text="Canny Low:", font=("Arial", 8)).grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_canny_low = ttk.Label(params_frame, text="50", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_canny_low.grid(row=4, column=1, padx=5)
-        self.slider_canny_low = ttk.Scale(params_frame, from_=0, to=255, orient=tk.HORIZONTAL,
-                                         command=self.update_canny_low, length=150)
-        self.slider_canny_low.set(50)
-        self.slider_canny_low.grid(row=4, column=2, padx=5)
-        
-        ttk.Label(params_frame, text="Canny High:", font=("Arial", 8)).grid(row=5, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_canny_high = ttk.Label(params_frame, text="150", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_canny_high.grid(row=5, column=1, padx=5)
-        self.slider_canny_high = ttk.Scale(params_frame, from_=0, to=255, orient=tk.HORIZONTAL,
-                                          command=self.update_canny_high, length=150)
-        self.slider_canny_high.set(150)
-        self.slider_canny_high.grid(row=5, column=2, padx=5)
-        
-        # Bilateral
-        ttk.Label(params_frame, text="Bilateral d:", font=("Arial", 8)).grid(row=6, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_bilateral_d = ttk.Label(params_frame, text="9", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_bilateral_d.grid(row=6, column=1, padx=5)
-        self.slider_bilateral_d = ttk.Scale(params_frame, from_=5, to=15, orient=tk.HORIZONTAL,
-                                           command=self.update_bilateral_d, length=150)
-        self.slider_bilateral_d.set(9)
-        self.slider_bilateral_d.grid(row=6, column=2, padx=5)
-        
-        ttk.Label(params_frame, text="Bilateral Sigma:", font=("Arial", 8)).grid(row=7, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_bilateral_sigma = ttk.Label(params_frame, text="75", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_bilateral_sigma.grid(row=7, column=1, padx=5)
-        self.slider_bilateral_sigma = ttk.Scale(params_frame, from_=10, to=150, orient=tk.HORIZONTAL,
-                                               command=self.update_bilateral_sigma, length=150)
-        self.slider_bilateral_sigma.set(75)
-        self.slider_bilateral_sigma.grid(row=7, column=2, padx=5)
-        
-        # Erosão
-        ttk.Label(params_frame, text="Erosão Kernel:", font=("Arial", 8)).grid(row=8, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_erosion_kernel = ttk.Label(params_frame, text="3", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_erosion_kernel.grid(row=8, column=1, padx=5)
-        self.slider_erosion_kernel = ttk.Scale(params_frame, from_=3, to=9, orient=tk.HORIZONTAL,
-                                              command=self.update_erosion_kernel, length=150)
-        self.slider_erosion_kernel.set(3)
-        self.slider_erosion_kernel.grid(row=8, column=2, padx=5)
-        
-        ttk.Label(params_frame, text="Erosão Iterações:", font=("Arial", 8)).grid(row=9, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_erosion_iterations = ttk.Label(params_frame, text="1", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_erosion_iterations.grid(row=9, column=1, padx=5)
-        self.slider_erosion_iterations = ttk.Scale(params_frame, from_=1, to=10, orient=tk.HORIZONTAL,
-                                                   command=self.update_erosion_iterations, length=150)
-        self.slider_erosion_iterations.set(1)
-        self.slider_erosion_iterations.grid(row=9, column=2, padx=5)
-        
-        # --- Botões de Filtros ---
-        filter_buttons = ttk.Frame(self.section1_frame)
-        filter_buttons.pack(pady=5, fill=tk.X)
-        
-        btn_apply_filter = ttk.Button(filter_buttons, text="✅ Aplicar Filtro", 
-                                      command=self.apply_selected_filter)
-        btn_apply_filter.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
-        
-        btn_reset_filters = ttk.Button(filter_buttons, text="↻ Reset", 
-                                       command=self.reset_filters)
-        btn_reset_filters.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
-        
-        # Histórico de filtros
-        ttk.Label(self.section1_frame, text="📜 Filtros Aplicados:", foreground="blue", font=("Arial", 8)).pack(pady=(5,0))
-        
-        self.lbl_filter_history = ttk.Label(self.section1_frame, text="Nenhum", 
-                                            foreground="gray", font=("Arial", 7), wraplength=340)
-        self.lbl_filter_history.pack(pady=2)
-        
-        self.lbl_current_filter = ttk.Label(self.section1_frame, text="Status: Original", 
-                                            foreground="green", font=("Arial", 8))
-        self.lbl_current_filter.pack(pady=2)
-        
-        # Separador
-        ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
-        
-        # ═══════════════════════════════════════════════════════════
-        # SEÇÃO 2: SEGMENTAÇÃO
-        # ═══════════════════════════════════════════════════════════
-        
-        # Header da seção 2
-        section2_header = ttk.Frame(control_frame)
-        section2_header.pack(fill=tk.X, pady=(5,0))
-        
-        ttk.Label(section2_header, text="✂️ SEÇÃO 2: SEGMENTAÇÃO", 
-                  font=("Arial", 11, "bold"), foreground="darkblue").pack(side=tk.LEFT, padx=5)
-        
-        # Frame da seção 2
-        self.section2_frame = ttk.Frame(control_frame)
-        self.section2_frame.pack(fill=tk.X, pady=5)
-        
-        # Informação sobre qual imagem é usada
-        info_frame = ttk.Frame(self.section2_frame)
-        info_frame.pack(pady=(5,10), fill=tk.X)
-        ttk.Label(info_frame, text="ℹ️ A segmentação SEMPRE usa a Janela 2 (Pré-processada)", 
-                  foreground="darkblue", font=("Arial", 8, "italic"), wraplength=340).pack(padx=5)
-        
-        ttk.Label(self.section2_frame, text="⚙️ Parâmetros de Segmentação:", foreground="blue", font=("Arial", 9, "bold")).pack(pady=(5,5))
-        
-        # Threshold do Region Growing
-        threshold_frame = ttk.Frame(self.section2_frame)
-        threshold_frame.pack(pady=5, fill=tk.X)
-        ttk.Label(threshold_frame, text="Threshold Region Growing:").pack(side=tk.LEFT)
-        self.lbl_threshold = ttk.Label(threshold_frame, text="50", foreground="red", font=("Arial", 9, "bold"))
-        self.lbl_threshold.pack(side=tk.LEFT, padx=5)
-        
-        self.slider_threshold = ttk.Scale(self.section2_frame, from_=5, to=100, orient=tk.HORIZONTAL,
-                                          command=self.update_threshold)
-        self.slider_threshold.set(50)
-        self.slider_threshold.pack(fill=tk.X, padx=10)
-        
-        # Conectividade do Region Growing
-        connectivity_frame = ttk.Frame(self.section2_frame)
-        connectivity_frame.pack(pady=5, fill=tk.X)
-        ttk.Label(connectivity_frame, text="Conectividade:", foreground="blue").pack(side=tk.LEFT, padx=5)
-        
-        self.connectivity_var = tk.IntVar(value=8)
-        ttk.Radiobutton(connectivity_frame, text="4-vizinhos (↑↓←→)", 
-                       variable=self.connectivity_var, value=4).pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(connectivity_frame, text="8-vizinhos (↑↓←→↖↗↙↘)", 
-                       variable=self.connectivity_var, value=8).pack(side=tk.LEFT, padx=5)
-        
-        # Kernel Morfológico
-        kernel_frame = ttk.Frame(self.section2_frame)
-        kernel_frame.pack(pady=5, fill=tk.X)
-        ttk.Label(kernel_frame, text="Kernel Morfológico:").pack(side=tk.LEFT)
-        self.lbl_kernel = ttk.Label(kernel_frame, text="15x15", foreground="red", font=("Arial", 9, "bold"))
-        self.lbl_kernel.pack(side=tk.LEFT, padx=5)
-        
-        self.slider_kernel = ttk.Scale(self.section2_frame, from_=3, to=25, orient=tk.HORIZONTAL,
-                                       command=self.update_kernel)
-        self.slider_kernel.set(15)
-        self.slider_kernel.pack(fill=tk.X, padx=10)
-        
-        # Operações Morfológicas
-        ttk.Label(self.section2_frame, text="Operações Morfológicas:", foreground="blue").pack(pady=(10,5))
-        
-        self.var_opening = tk.BooleanVar(value=True)
-        chk_opening = ttk.Checkbutton(self.section2_frame, text="🔹 Abertura (remover ruído)", 
-                                      variable=self.var_opening, command=self.update_morphology_flags)
-        chk_opening.pack(anchor=tk.W, padx=20)
-        
-        self.var_closing = tk.BooleanVar(value=False)
-        chk_closing = ttk.Checkbutton(self.section2_frame, text="🔹 Fechamento (fechar gaps)", 
-                                      variable=self.var_closing, command=self.update_morphology_flags)
-        chk_closing.pack(anchor=tk.W, padx=20)
-        
-        self.var_fill_holes = tk.BooleanVar(value=True)
-        chk_fill_holes = ttk.Checkbutton(self.section2_frame, text="🔹 Preencher buracos", 
-                                         variable=self.var_fill_holes, command=self.update_morphology_flags)
-        chk_fill_holes.pack(anchor=tk.W, padx=20)
-        
-        self.var_smooth = tk.BooleanVar(value=True)
-        chk_smooth = ttk.Checkbutton(self.section2_frame, text="🔹 Suavizar contornos", 
-                                     variable=self.var_smooth, command=self.update_morphology_flags)
-        chk_smooth.pack(anchor=tk.W, padx=20)
-        
-        ttk.Separator(self.section2_frame, orient='horizontal').pack(pady=10, fill=tk.X)
-        
-        # Opções de Segmentação
-        ttk.Label(self.section2_frame, text="Métodos de Segmentação:", foreground="blue", 
-                  font=("Arial", 9, "bold")).pack(pady=(5,5))
-        
-        # Método de segmentação
-        self.segmentation_method = tk.StringVar(value="region_growing")
-        
-        ttk.Radiobutton(self.section2_frame, text="🌱 Region Growing (clique para seed)", 
-                       variable=self.segmentation_method, value="region_growing").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(self.section2_frame, text="🎯 Watershed", 
-                       variable=self.segmentation_method, value="watershed").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(self.section2_frame, text="🔲 Thresholding Adaptativo", 
-                       variable=self.segmentation_method, value="adaptive_threshold").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(self.section2_frame, text="🧲 K-Means Clustering", 
-                       variable=self.segmentation_method, value="kmeans").pack(anchor=tk.W, padx=20)
-        
-        # Edição de Seeds Fixos
-        seeds_edit_frame = ttk.LabelFrame(self.section2_frame, text="📍 Seeds Fixos (Editáveis)", padding="5")
-        seeds_edit_frame.pack(pady=(10,5), fill=tk.X)
-        
-        # Lista de seeds
-        seeds_list_frame = ttk.Frame(seeds_edit_frame)
-        seeds_list_frame.pack(fill=tk.X, pady=2)
-        
-        self.auto_seeds_listbox = tk.Listbox(seeds_list_frame, height=3, font=("Courier", 9))
-        self.auto_seeds_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,5))
-        self.update_auto_seeds_display()
-        
-        # Botões de edição
-        seeds_buttons_frame = ttk.Frame(seeds_edit_frame)
-        seeds_buttons_frame.pack(fill=tk.X, pady=2)
-        
-        # Adicionar seed
-        add_seed_frame = ttk.Frame(seeds_buttons_frame)
-        add_seed_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(add_seed_frame, text="X:").pack(side=tk.LEFT, padx=2)
-        self.auto_seed_x_entry = ttk.Entry(add_seed_frame, width=6)
-        self.auto_seed_x_entry.pack(side=tk.LEFT, padx=2)
-        ttk.Label(add_seed_frame, text="Y:").pack(side=tk.LEFT, padx=2)
-        self.auto_seed_y_entry = ttk.Entry(add_seed_frame, width=6)
-        self.auto_seed_y_entry.pack(side=tk.LEFT, padx=2)
-        ttk.Button(add_seed_frame, text="➕ Adicionar", 
-                   command=self.add_auto_seed, width=12).pack(side=tk.LEFT, padx=5)
-        
-        # Remover seed selecionado
-        ttk.Button(seeds_buttons_frame, text="➖ Remover Selecionado", 
-                   command=self.remove_auto_seed).pack(pady=2, fill=tk.X)
-        
-        # Botões de Segmentação
-        ttk.Label(self.section2_frame, text="Executar Segmentação:", foreground="blue").pack(pady=(10,2))
-        
-        btn_segment_auto = ttk.Button(self.section2_frame, text="▶ Segmentação Automática (Seeds Fixos)", 
-                                      command=self.segment_ventricles)
-        btn_segment_auto.pack(pady=2, fill=tk.X)
-        
-        btn_multi_segment = ttk.Button(self.section2_frame, text="🖱️ Modo Multi-Seed (Clique nas Janelas)", 
-                                       command=self.toggle_multi_seed_mode)
-        btn_multi_segment.pack(pady=2, fill=tk.X)
-        
-        self.lbl_multi_seed = ttk.Label(self.section2_frame, text="Multi-Seed: Inativo", foreground="gray", 
-                                        font=("Arial", 8))
-        self.lbl_multi_seed.pack(pady=2)
-        
-        self.lbl_segment_status = ttk.Label(self.section2_frame, text="Segmentação: Aguardando...", 
-                                            foreground="gray", font=("Arial", 8))
-        self.lbl_segment_status.pack(pady=2)
-        
-        # Separador
-        ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
-        
-        # ═══════════════════════════════════════════════════════════
-        # PROCESSAMENTO EM LOTE (PASTA INTEIRA)
-        # ═══════════════════════════════════════════════════════════
-        
-        # Header
-        batch_header = ttk.Frame(control_frame)
-        batch_header.pack(fill=tk.X, pady=(5,0))
-        
-        ttk.Label(batch_header, text="📁 PROCESSAR PASTA INTEIRA", 
-                  font=("Arial", 11, "bold"), foreground="darkorange").pack(side=tk.LEFT, padx=5)
-        
-        # Frame do batch
-        batch_frame = ttk.Frame(control_frame)
-        batch_frame.pack(fill=tk.X, pady=5)
-        
-        # Botão principal para abrir configuração
-        btn_batch_config = ttk.Button(batch_frame, text="⚙️ Configurar e Processar Pasta", 
-                                      command=self.open_batch_config_window)
-        btn_batch_config.pack(pady=5, fill=tk.X, padx=5)
-        
-        ttk.Label(batch_frame, text="Configure filtros, seeds e processe múltiplos arquivos", 
-                  foreground="gray", font=("Arial", 8)).pack(pady=2)
-        
-        # Separador final
-        ttk.Separator(control_frame, orient='horizontal').pack(pady=10, fill=tk.X)
-        
-        # Log
-        self.log_text = tk.Text(control_frame, height=10, state=tk.DISABLED)
-        self.log_text.pack(pady=10, fill=tk.BOTH, expand=True)
+        # --- Notebook com Abas + Log  ---
+        notebook_container = ttk.Frame(main_frame)
+        notebook_container.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        # Configure grid weights for equal splitting
+        notebook_container.grid_rowconfigure(0, weight=1)  # Top row (notebook)
+        notebook_container.grid_rowconfigure(1, weight=1)  # Bottom row (log)
+        notebook_container.grid_columnconfigure(0, weight=1)
+
+        # --- Notebook (Abas) ---
+        self.notebook = ttk.Notebook(notebook_container)
+        self.notebook.grid(row=0, column=0, sticky="nsew", pady=(5, 2))
+        # Bind para detectar mudança de aba
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+
+        # --- Aba 1: Carregamento e Visualização ---
+        self.tab1 = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab1, text="Carregamento")
+        self.setup_tab1()
+
+        # --- Aba 2: Filtros ---
+        self.tab2 = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab2, text="Filtros")
+        self.setup_tab2()
+
+        # --- Aba 3: Segmentação ---
+        self.tab3 = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab3, text="Segmentação")
+        self.setup_tab3()
+
+        # --- Aba 4: Processamento em Lote ---
+        self.tab4 = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab4, text="Processamento em Lote")
+        self.setup_tab4()
+
+        # --- Área de Log ---
+        log_frame = ttk.LabelFrame(notebook_container, text="Log do Sistema", padding="5")
+        log_frame.grid(row=1, column=0, sticky="nsew", pady=(2, 5))
+
+        self.log_text = tk.Text(log_frame, height=8, state=tk.DISABLED)
+        self.log_text.pack(fill=tk.BOTH, expand=True)
+
+        # Barra de scroll para o log
+        log_scrollbar = ttk.Scrollbar(self.log_text, command=self.log_text.yview)
+        log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.configure(yscrollcommand=log_scrollbar.set)
         
         # Configura os bindings do sistema depois da criação da interface
         self.root.after(100, self.setup_bindings)
@@ -615,27 +717,6 @@ class AlzheimerApp:
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.DISABLED)
-
-    def create_menu(self):
-        """ Cria a barra de menu superior. """
-        menu_bar = tk.Menu(self.root)
-        self.root.config(menu=menu_bar)
-
-        # Menu Arquivo
-        file_menu = tk.Menu(menu_bar, tearoff=0)
-        menu_bar.add_cascade(label="Arquivo", menu=file_menu)
-        file_menu.add_command(label="Carregar CSV", command=self.load_csv)
-        file_menu.add_command(label="Carregar Imagem...", command=self.load_image)
-        file_menu.add_separator()
-        file_menu.add_command(label="🔄 Fazer Merge de CSVs", command=self.merge_csv_files)
-        file_menu.add_separator()
-        file_menu.add_command(label="Sair", command=self.root.quit)
-
-        # Menu Acessibilidade [cite: 75]
-        help_menu = tk.Menu(menu_bar, tearoff=0)
-        menu_bar.add_cascade(label="Acessibilidade", menu=help_menu)
-        help_menu.add_command(label="Aumentar Fonte", command=self.increase_font)
-        help_menu.add_command(label="Diminuir Fonte", command=self.decrease_font)
 
     def update_font_size(self):
         """ Atualiza o tamanho da fonte de todos os widgets. """

@@ -1,9 +1,10 @@
-Pillow
-numpy
-pandas
 opencv-python
-nibabel
-matplotlib
 scikit-learn
-xgboost
+scikit-image
+matplotlib
 tensorflow
+nibabel
+xgboost
+Pillow
+pandas
+numpy
