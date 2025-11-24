@@ -30,26 +30,44 @@ import matplotlib.pyplot as plt
 from skimage import measure  # Para descritores morfológicos
 
 # Machine Learning
-from sklearn.model_selection import GroupShuffleSplit, train_test_split
+from sklearn.model_selection import GroupShuffleSplit, train_test_split, RandomizedSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
     accuracy_score, confusion_matrix, classification_report,
-    mean_squared_error, r2_score
+    mean_squared_error, r2_score, recall_score, mean_absolute_error,
+    roc_curve, auc, precision_score, f1_score, roc_auc_score
 )
 from sklearn.linear_model import LinearRegression  # Regressor Raso
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.svm import SVR
+from sklearn.utils.class_weight import compute_class_weight
 import xgboost as xgb  # Classificador Raso
 
 # Deep Learning (TensorFlow com Keras)
 import tensorflow as tf
 from tensorflow.keras.applications import ResNet50
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Input
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Input, Dropout, BatchNormalization
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.regularizers import l2
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.layers import RandomRotation, RandomZoom, RandomTranslation, RandomContrast
 
 # Para evitar problemas de exibição em algumas versões
 import os
+import warnings
+from pathlib import Path
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
+warnings.filterwarnings('ignore')
+
+# Tentar importar seaborn, usar matplotlib se não disponível
+try:
+    import seaborn as sns
+    HAS_SEABORN = True
+except ImportError:
+    HAS_SEABORN = False
 
 ################################################################################
 # --- 2. CLASSE PRINCIPAL DA APLICAÇÃO (GUI) ---
@@ -132,6 +150,16 @@ class AlzheimerApp:
         # --- Sistema de Descritores Morfológicos ---
         self.descriptors_list = []  # Lista para acumular descritores de todas as imagens
         
+        # --- Variáveis para Parte 8 (Scatterplots) ---
+        self.scatterplots_dir = "scatterplots"
+        self.scatterplot_files = []  # Lista de arquivos PNG gerados
+        self.current_scatterplot_index = 0
+        self.scatterplot_canvas = None
+        self.scatterplot_figure = None
+        
+        # --- Variáveis para Parte 9 (Split) ---
+        self.split_dataframe = None  # DataFrame para split
+        
         # Parâmetros ajustáveis para cada filtro
         self.filter_params = {
             'clahe_clip_limit': 2.0,  # CLAHE: 0.5 - 10.0
@@ -154,12 +182,29 @@ class AlzheimerApp:
         # Menu Superior
         self.create_menu()
         
-        # Frame Principal
-        main_frame = ttk.Frame(root, padding="10")
-        main_frame.pack(expand=True, fill=tk.BOTH)
+        # Criar Notebook (abas)
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
+        
+        # Criar abas
+        self.create_main_tab()  # Aba principal (conteúdo original)
+        self.create_parte8_tab()  # Aba Parte 8 - Scatterplots
+        self.create_parte9_tab()  # Aba Parte 9 - Split de Dados
+        self.create_parte10_tab()  # Aba XGBoost - Classificador Raso
+        self.create_resnet50_tab()  # Aba ResNet50 - Classificador Profundo
+        self.create_parte11_tab()  # Aba Parte 11 - Regressão de Idade
+        
+        # Frame Principal (mantido para compatibilidade, mas não usado diretamente)
+        # main_frame = ttk.Frame(root, padding="10")
+        # main_frame.pack(expand=True, fill=tk.BOTH)
+        
+    def create_main_tab(self):
+        """Cria a aba principal com todo o conteúdo original"""
+        main_tab = ttk.Frame(self.notebook)
+        self.notebook.add(main_tab, text="Principal")
         
         # Frame Superior: Grid de Imagens (2 colunas: imagens + controles)
-        images_and_controls_frame = ttk.Frame(main_frame)
+        images_and_controls_frame = ttk.Frame(main_tab)
         images_and_controls_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         
         # Frame de Imagens (à esquerda)
@@ -608,6 +653,621 @@ class AlzheimerApp:
         
         # Configura os bindings do sistema depois da criação da interface
         self.root.after(100, self.setup_bindings)
+    
+    def create_parte8_tab(self):
+        """Cria a aba Parte 8 - Scatterplots"""
+        parte8_tab = ttk.Frame(self.notebook)
+        self.notebook.add(parte8_tab, text="Parte 8 - Scatterplots")
+        
+        # Frame principal dividido em esquerda (visualização) e direita (controles)
+        main_frame_p8 = ttk.Frame(parte8_tab)
+        main_frame_p8.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Painel esquerdo: Visualização do gráfico
+        left_frame_p8 = ttk.Frame(main_frame_p8, relief=tk.RIDGE)
+        left_frame_p8.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        ttk.Label(left_frame_p8, text="Visualização do Scatterplot", 
+                 font=("Arial", 11, "bold")).pack(pady=5)
+        
+        # Label de status (fora do canvas para não ser destruído)
+        self.lbl_scatterplot_status = ttk.Label(
+            left_frame_p8, 
+            text="Nenhum gráfico carregado.\nSelecione um arquivo CSV e gere os gráficos.",
+            font=("Arial", 10),
+            foreground="gray"
+        )
+        self.lbl_scatterplot_status.pack(pady=5)
+        
+        # Canvas para exibir o gráfico
+        self.scatterplot_canvas_frame = ttk.Frame(left_frame_p8)
+        self.scatterplot_canvas_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Label inicial dentro do canvas (será substituído pela imagem)
+        initial_label = ttk.Label(
+            self.scatterplot_canvas_frame, 
+            text="",
+            font=("Arial", 10),
+            foreground="gray"
+        )
+        initial_label.pack(expand=True)
+        
+        # Controles de navegação (se houver múltiplos gráficos)
+        nav_frame = ttk.Frame(left_frame_p8)
+        nav_frame.pack(pady=5)
+        
+        self.btn_prev_scatter = ttk.Button(nav_frame, text="◀ Anterior", 
+                                           command=self.show_previous_scatterplot,
+                                           state=tk.DISABLED)
+        self.btn_prev_scatter.pack(side=tk.LEFT, padx=5)
+        
+        self.lbl_scatterplot_info = ttk.Label(nav_frame, text="0 / 0")
+        self.lbl_scatterplot_info.pack(side=tk.LEFT, padx=10)
+        
+        self.btn_next_scatter = ttk.Button(nav_frame, text="Próximo ▶", 
+                                          command=self.show_next_scatterplot,
+                                          state=tk.DISABLED)
+        self.btn_next_scatter.pack(side=tk.LEFT, padx=5)
+        
+        # Painel direito: Controles
+        right_frame_p8 = ttk.Frame(main_frame_p8, width=350)
+        right_frame_p8.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
+        right_frame_p8.pack_propagate(False)
+        
+        ttk.Label(right_frame_p8, text="Parte 8: Scatterplots aos Pares", 
+                 font=("Arial", 12, "bold"), foreground="darkblue").pack(pady=10)
+        
+        ttk.Label(right_frame_p8, 
+                 text="Gere scatterplots para todas as combinações de características ventriculares.",
+                 wraplength=320).pack(pady=5, padx=10)
+        
+        # Botão para selecionar arquivo CSV
+        ttk.Separator(right_frame_p8, orient='horizontal').pack(fill=tk.X, pady=10)
+        ttk.Label(right_frame_p8, text="1. Selecione o arquivo CSV:", 
+                 font=("Arial", 10, "bold")).pack(pady=(10, 5))
+        
+        self.lbl_csv_file_p8 = ttk.Label(right_frame_p8, text="Nenhum arquivo selecionado", 
+                                        foreground="red", wraplength=320)
+        self.lbl_csv_file_p8.pack(pady=5, padx=10)
+        
+        btn_select_csv_p8 = ttk.Button(right_frame_p8, text="Selecionar CSV", 
+                                      command=self.select_csv_parte8)
+        btn_select_csv_p8.pack(pady=5, padx=10, fill=tk.X)
+        
+        # Botão para selecionar pasta de saída
+        ttk.Separator(right_frame_p8, orient='horizontal').pack(fill=tk.X, pady=10)
+        ttk.Label(right_frame_p8, text="Pasta de saída:", 
+                 font=("Arial", 10, "bold")).pack(pady=(10, 5))
+        
+        self.lbl_output_dir_p8 = ttk.Label(right_frame_p8, text=f"Pasta: {self.scatterplots_dir}", 
+                                          foreground="blue", wraplength=320)
+        self.lbl_output_dir_p8.pack(pady=5, padx=10)
+        
+        btn_select_output_dir = ttk.Button(right_frame_p8, text="Selecionar Pasta de Saída", 
+                                          command=self.select_output_dir_parte8)
+        btn_select_output_dir.pack(pady=5, padx=10, fill=tk.X)
+        
+        # Botão para gerar scatterplots
+        ttk.Separator(right_frame_p8, orient='horizontal').pack(fill=tk.X, pady=10)
+        ttk.Label(right_frame_p8, text="2. Gere os scatterplots:", 
+                 font=("Arial", 10, "bold")).pack(pady=(10, 5))
+        
+        btn_generate_scatterplots = ttk.Button(
+            right_frame_p8, 
+            text="Gerar Scatterplots", 
+            command=self.generate_scatterplots_parte8
+        )
+        btn_generate_scatterplots.pack(pady=10, padx=10, fill=tk.X)
+        
+        # Status
+        self.lbl_scatterplot_gen_status = ttk.Label(
+            right_frame_p8, 
+            text="Aguardando...",
+            foreground="gray"
+        )
+        self.lbl_scatterplot_gen_status.pack(pady=5)
+        
+        # Lista de gráficos gerados
+        ttk.Separator(right_frame_p8, orient='horizontal').pack(fill=tk.X, pady=10)
+        ttk.Label(right_frame_p8, text="Gráficos gerados:", 
+                 font=("Arial", 10, "bold")).pack(pady=(10, 5))
+        
+        # Listbox para mostrar gráficos
+        listbox_frame = ttk.Frame(right_frame_p8)
+        listbox_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        scrollbar_list = ttk.Scrollbar(listbox_frame)
+        scrollbar_list.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.listbox_scatterplots = tk.Listbox(
+            listbox_frame, 
+            yscrollcommand=scrollbar_list.set,
+            height=10
+        )
+        self.listbox_scatterplots.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.listbox_scatterplots.bind('<<ListboxSelect>>', self.on_scatterplot_select)
+        scrollbar_list.config(command=self.listbox_scatterplots.yview)
+    
+    def create_parte9_tab(self):
+        """Cria a aba Parte 9 - Split de Dados"""
+        parte9_tab = ttk.Frame(self.notebook)
+        self.notebook.add(parte9_tab, text="Parte 9 - Split de Dados")
+        
+        # Frame principal
+        main_frame_p9 = ttk.Frame(parte9_tab)
+        main_frame_p9.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        ttk.Label(main_frame_p9, text="Parte 9: Split Treino/Validação/Teste", 
+                 font=("Arial", 14, "bold"), foreground="darkblue").pack(pady=10)
+        
+        ttk.Label(main_frame_p9, 
+                 text="Divida os dados em conjuntos de treino, validação e teste por paciente (sem vazamento).",
+                 wraplength=600).pack(pady=5)
+        
+        # Seção de seleção de arquivo
+        ttk.Separator(main_frame_p9, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_p9, text="1. Selecione o arquivo CSV:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        self.lbl_csv_file_p9 = ttk.Label(main_frame_p9, text="Nenhum arquivo selecionado", 
+                                        foreground="red", wraplength=600)
+        self.lbl_csv_file_p9.pack(pady=5)
+        
+        btn_select_csv_p9 = ttk.Button(main_frame_p9, text="Selecionar CSV", 
+                                      command=self.select_csv_parte9)
+        btn_select_csv_p9.pack(pady=10)
+        
+        # Seção de execução
+        ttk.Separator(main_frame_p9, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_p9, text="2. Execute o split:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        btn_execute_split = ttk.Button(
+            main_frame_p9, 
+            text="Executar Split de Dados", 
+            command=self.execute_split_parte9,
+            width=30
+        )
+        btn_execute_split.pack(pady=10)
+        
+        # Status e resultados
+        self.lbl_split_status = ttk.Label(
+            main_frame_p9, 
+            text="Aguardando...",
+            foreground="gray"
+        )
+        self.lbl_split_status.pack(pady=5)
+        
+        # Área de resultados (scrollable)
+        ttk.Separator(main_frame_p9, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_p9, text="Resultados:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        results_frame = ttk.Frame(main_frame_p9)
+        results_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        scrollbar_results = ttk.Scrollbar(results_frame)
+        scrollbar_results.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.text_results_p9 = tk.Text(
+            results_frame, 
+            yscrollcommand=scrollbar_results.set,
+            wrap=tk.WORD,
+            height=15
+        )
+        self.text_results_p9.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_results.config(command=self.text_results_p9.yview)
+        
+        self.text_results_p9.insert(tk.END, "Os resultados do split serão exibidos aqui...\n")
+        self.text_results_p9.config(state=tk.DISABLED)
+    
+    def create_parte10_tab(self):
+        """Cria a aba XGBoost - Classificador Raso"""
+        xgb_tab = ttk.Frame(self.notebook)
+        self.notebook.add(xgb_tab, text="XGBoost - Classificador Raso")
+        
+        # Frame principal
+        main_frame_xgb = ttk.Frame(xgb_tab)
+        main_frame_xgb.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        ttk.Label(main_frame_xgb, text="XGBoost - Classificador Raso", 
+                 font=("Arial", 14, "bold"), foreground="darkblue").pack(pady=10)
+        
+        ttk.Label(main_frame_xgb, 
+                 text="Classificador baseado em descritores manuais usando XGBoost com Random Search automático.",
+                 wraplength=700).pack(pady=5)
+        
+        # Informação sobre Random Search
+        info_frame_xgb = ttk.LabelFrame(main_frame_xgb, text="ℹ️ Informações", padding="10")
+        info_frame_xgb.pack(fill=tk.X, pady=10, padx=10)
+        
+        ttk.Label(info_frame_xgb, 
+                 text="• Random Search automático: 100 iterações, 3-fold CV, métrica ROC-AUC\n"
+                      "• Early Stopping: para automaticamente se não houver melhoria\n"
+                      "• Normalização: StandardScaler aplicado aos dados\n"
+                      "• Features: area, perimeter, eccentricity, extent, solidity\n"
+                      "• Gera: curva de aprendizado e matriz de confusão",
+                 wraplength=700,
+                 justify=tk.LEFT).pack(pady=5)
+        
+        # Botões de execução
+        ttk.Separator(main_frame_xgb, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_xgb, text="Executar Classificador:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        buttons_frame_xgb = ttk.Frame(main_frame_xgb)
+        buttons_frame_xgb.pack(pady=10)
+        
+        btn_train_xgb = ttk.Button(
+            buttons_frame_xgb, 
+            text="Treinar XGBoost (Random Search)", 
+            command=self.train_xgb_parte10,
+            width=35
+        )
+        btn_train_xgb.pack(pady=5)
+        
+        # Status
+        self.lbl_status_p10 = ttk.Label(
+            main_frame_xgb, 
+            text="Aguardando...",
+            foreground="gray"
+        )
+        self.lbl_status_p10.pack(pady=5)
+        
+        # Área de resultados (scrollable)
+        ttk.Separator(main_frame_xgb, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_xgb, text="Resultados:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        results_frame_xgb = ttk.Frame(main_frame_xgb)
+        results_frame_xgb.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        scrollbar_results_xgb = ttk.Scrollbar(results_frame_xgb)
+        scrollbar_results_xgb.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.text_results_p10 = tk.Text(
+            results_frame_xgb, 
+            yscrollcommand=scrollbar_results_xgb.set,
+            wrap=tk.WORD,
+            height=20
+        )
+        self.text_results_p10.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_results_xgb.config(command=self.text_results_p10.yview)
+        
+        self.text_results_p10.insert(tk.END, "Os resultados do XGBoost serão exibidos aqui...\n\n")
+        self.text_results_p10.insert(tk.END, "ℹ️ NOTA: O XGBoost executa Random Search automático (100 iterações, 3-fold CV, ROC-AUC)\n")
+        self.text_results_p10.insert(tk.END, "   com normalização de dados e early stopping para otimizar hiperparâmetros.\n")
+        self.text_results_p10.insert(tk.END, "   Isso pode levar alguns minutos, mas melhora significativamente a generalização.\n")
+        self.text_results_p10.config(state=tk.DISABLED)
+    
+    def create_resnet50_tab(self):
+        """Cria a aba ResNet50 - Classificador Profundo"""
+        resnet_tab = ttk.Frame(self.notebook)
+        self.notebook.add(resnet_tab, text="ResNet50 - Classificador Profundo")
+        
+        # Frame principal
+        main_frame_resnet = ttk.Frame(resnet_tab)
+        main_frame_resnet.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        ttk.Label(main_frame_resnet, text="ResNet50 - Classificador Profundo", 
+                 font=("Arial", 14, "bold"), foreground="darkblue").pack(pady=10)
+        
+        ttk.Label(main_frame_resnet, 
+                 text="Classificador baseado em imagens usando ResNet50 com fine-tuning do ImageNet.",
+                 wraplength=700).pack(pady=5)
+        
+        # Informação sobre ResNet50
+        info_frame_resnet = ttk.LabelFrame(main_frame_resnet, text="ℹ️ Informações", padding="10")
+        info_frame_resnet.pack(fill=tk.X, pady=10, padx=10)
+        
+        ttk.Label(info_frame_resnet, 
+                 text="• Transfer Learning: pesos pré-treinados no ImageNet\n"
+                      "• Fine-tuning: últimas 10 camadas treináveis\n"
+                      "• Otimizador: Adam com learning rate 1e-4\n"
+                      "• Early Stopping: para automaticamente se não houver melhoria\n"
+                      "• Formatos suportados: .png, .jpg, .jpeg, .nii, .nii.gz (NIfTI)\n"
+                      "• Para imagens 3D (.nii): extrai slice coronal central automaticamente\n"
+                      "• Gera: curva de aprendizado e matriz de confusão",
+                 wraplength=700,
+                 justify=tk.LEFT).pack(pady=5)
+        
+        # Seção de configuração
+        ttk.Separator(main_frame_resnet, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_resnet, text="Configurações:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        # Pasta de imagens
+        config_frame_resnet = ttk.Frame(main_frame_resnet)
+        config_frame_resnet.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(config_frame_resnet, text="Pasta de imagens:").pack(side=tk.LEFT, padx=5)
+        self.entry_image_dir_resnet = ttk.Entry(config_frame_resnet, width=40)
+        self.entry_image_dir_resnet.insert(0, "images")
+        self.entry_image_dir_resnet.pack(side=tk.LEFT, padx=5)
+        
+        btn_browse_images_resnet = ttk.Button(config_frame_resnet, text="Procurar...", 
+                                      command=self.browse_image_dir_resnet)
+        btn_browse_images_resnet.pack(side=tk.LEFT, padx=5)
+        
+        # Botões de execução
+        ttk.Separator(main_frame_resnet, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_resnet, text="Executar Classificador:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        buttons_frame_resnet = ttk.Frame(main_frame_resnet)
+        buttons_frame_resnet.pack(pady=10)
+        
+        btn_train_resnet = ttk.Button(
+            buttons_frame_resnet, 
+            text="Treinar ResNet50", 
+            command=self.train_resnet_parte10,
+            width=35
+        )
+        btn_train_resnet.pack(pady=5)
+        
+        # Status
+        self.lbl_status_resnet = ttk.Label(
+            main_frame_resnet, 
+            text="Aguardando...",
+            foreground="gray"
+        )
+        self.lbl_status_resnet.pack(pady=5)
+        
+        # Área de resultados (scrollable)
+        ttk.Separator(main_frame_resnet, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_resnet, text="Resultados:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        results_frame_resnet = ttk.Frame(main_frame_resnet)
+        results_frame_resnet.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        scrollbar_results_resnet = ttk.Scrollbar(results_frame_resnet)
+        scrollbar_results_resnet.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.text_results_resnet = tk.Text(
+            results_frame_resnet, 
+            yscrollcommand=scrollbar_results_resnet.set,
+            wrap=tk.WORD,
+            height=20
+        )
+        self.text_results_resnet.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_results_resnet.config(command=self.text_results_resnet.yview)
+        
+        self.text_results_resnet.insert(tk.END, "Os resultados do ResNet50 serão exibidos aqui...\n\n")
+        self.text_results_resnet.insert(tk.END, "ℹ️ NOTA: O ResNet50 usa transfer learning do ImageNet com fine-tuning.\n")
+        self.text_results_resnet.insert(tk.END, "   Formatos suportados: .png, .jpg, .jpeg, .nii, .nii.gz\n")
+        self.text_results_resnet.insert(tk.END, "   Para imagens NIfTI (.nii): extrai slice coronal central automaticamente.\n")
+        self.text_results_resnet.insert(tk.END, "   Certifique-se de que a pasta de imagens está configurada corretamente.\n")
+        self.text_results_resnet.config(state=tk.DISABLED)
+    
+    # --- PARTE 11: REGRESSÃO DE IDADE ---
+    
+    def create_parte11_tab(self):
+        """Cria a aba Parte 11 - Regressão de Idade"""
+        parte11_tab = ttk.Frame(self.notebook)
+        self.notebook.add(parte11_tab, text="Parte 11 - Regressão de Idade")
+        
+        # Frame principal
+        main_frame_p11 = ttk.Frame(parte11_tab)
+        main_frame_p11.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        ttk.Label(main_frame_p11, text="Parte 11: Regressão para Estimar Idade do Paciente", 
+                 font=("Arial", 14, "bold"), foreground="darkblue").pack(pady=10)
+        
+        ttk.Label(main_frame_p11, 
+                 text="Estime a idade do paciente usando regressores raso (tabular) e profundo (imagens).",
+                 wraplength=700).pack(pady=5)
+        
+        # Informação
+        info_frame_p11 = ttk.LabelFrame(main_frame_p11, text="ℹ️ Informações", padding="10")
+        info_frame_p11.pack(fill=tk.X, pady=10, padx=10)
+        
+        ttk.Label(info_frame_p11, 
+                 text="• Regressor Raso: Usa descritores ventriculares (area, perimeter, etc.)\n"
+                      "• Regressor Profundo: Usa imagens NIfTI com ResNet50 (transfer learning)\n"
+                      "• Métricas: MAE, RMSE, R²\n"
+                      "• Gráficos: Predito vs Real",
+                 wraplength=700,
+                 justify=tk.LEFT).pack(pady=5)
+        
+        # Seção de configuração
+        ttk.Separator(main_frame_p11, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_p11, text="Configurações:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        # Pasta de imagens
+        config_frame_p11 = ttk.Frame(main_frame_p11)
+        config_frame_p11.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(config_frame_p11, text="Pasta de imagens:").pack(side=tk.LEFT, padx=5)
+        self.entry_image_dir_p11 = ttk.Entry(config_frame_p11, width=40)
+        self.entry_image_dir_p11.insert(0, "images")
+        self.entry_image_dir_p11.pack(side=tk.LEFT, padx=5)
+        
+        btn_browse_images_p11 = ttk.Button(config_frame_p11, text="Procurar...", 
+                                      command=self.browse_image_dir_parte11)
+        btn_browse_images_p11.pack(side=tk.LEFT, padx=5)
+        
+        # Botões de execução
+        ttk.Separator(main_frame_p11, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_p11, text="Executar Regressores:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        buttons_frame_p11 = ttk.Frame(main_frame_p11)
+        buttons_frame_p11.pack(pady=10)
+        
+        btn_train_shallow = ttk.Button(
+            buttons_frame_p11, 
+            text="Treinar Regressor Raso", 
+            command=self.train_shallow_regressor_p11,
+            width=30
+        )
+        btn_train_shallow.pack(pady=5)
+        
+        btn_train_deep = ttk.Button(
+            buttons_frame_p11, 
+            text="Treinar Regressor Profundo", 
+            command=self.train_deep_regressor_p11,
+            width=30
+        )
+        btn_train_deep.pack(pady=5)
+        
+        btn_train_both_p11 = ttk.Button(
+            buttons_frame_p11, 
+            text="Treinar Ambos", 
+            command=self.train_both_regressors_p11,
+            width=30
+        )
+        btn_train_both_p11.pack(pady=5)
+        
+        # Status
+        self.lbl_status_p11 = ttk.Label(
+            main_frame_p11, 
+            text="Aguardando...",
+            foreground="gray"
+        )
+        self.lbl_status_p11.pack(pady=5)
+        
+        # Área de resultados
+        ttk.Separator(main_frame_p11, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_p11, text="Resultados:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        results_frame_p11 = ttk.Frame(main_frame_p11)
+        results_frame_p11.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        scrollbar_results_p11 = ttk.Scrollbar(results_frame_p11)
+        scrollbar_results_p11.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.text_results_p11 = tk.Text(
+            results_frame_p11, 
+            yscrollcommand=scrollbar_results_p11.set,
+            wrap=tk.WORD,
+            height=20
+        )
+        self.text_results_p11.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_results_p11.config(command=self.text_results_p11.yview)
+        
+        self.text_results_p11.insert(tk.END, "Os resultados dos regressores serão exibidos aqui...\n\n")
+        self.text_results_p11.insert(tk.END, "ℹ️ NOTA: Use os mesmos splits (train/val/test) da Parte 9.\n")
+        self.text_results_p11.insert(tk.END, "   Target: coluna 'Age' do CSV.\n")
+        self.text_results_p11.config(state=tk.DISABLED)
+    
+    def browse_image_dir_parte11(self):
+        """Seleciona pasta de imagens para Parte 11"""
+        folder = filedialog.askdirectory(
+            title="Selecionar Pasta de Imagens",
+            initialdir=self.entry_image_dir_p11.get() if hasattr(self, 'entry_image_dir_p11') else "."
+        )
+        if folder:
+            self.entry_image_dir_p11.delete(0, tk.END)
+            self.entry_image_dir_p11.insert(0, folder)
+    
+    def train_shallow_regressor_p11(self):
+        """Treina o regressor raso (tabular)"""
+        import sys
+        import io
+        
+        # Verificar se os CSVs existem
+        required_files = ["train_split.csv", "val_split.csv", "test_split.csv"]
+        missing = [f for f in required_files if not os.path.exists(f)]
+        if missing:
+            messagebox.showerror("Erro", f"Arquivos não encontrados: {missing}\n\nExecute a Parte 9 primeiro!")
+            return
+        
+        self.lbl_status_p11.config(
+            text="Treinando Regressor Raso...", 
+            foreground="blue"
+        )
+        self.root.update()
+        
+        # Redirecionar stdout
+        old_stdout = sys.stdout
+        sys.stdout = buffer = io.StringIO()
+        
+        try:
+            result = self.train_shallow_regressor_internal()
+            
+            output = buffer.getvalue()
+            sys.stdout = old_stdout
+            
+            # Exibir resultados
+            self.text_results_p11.config(state=tk.NORMAL)
+            self.text_results_p11.insert(tk.END, output)
+            self.text_results_p11.see(tk.END)
+            self.text_results_p11.config(state=tk.DISABLED)
+            
+            self.lbl_status_p11.config(text="✓ Regressor Raso treinado com sucesso!", foreground="green")
+            messagebox.showinfo("Sucesso", "Regressor Raso treinado!\n\nVerifique os arquivos gerados:\n- pred_vs_real_raso.png")
+            
+        except Exception as e:
+            sys.stdout = old_stdout
+            error_msg = f"Erro ao treinar Regressor Raso:\n{str(e)}"
+            self.text_results_p11.config(state=tk.NORMAL)
+            self.text_results_p11.insert(tk.END, f"\n{error_msg}\n")
+            self.text_results_p11.see(tk.END)
+            self.text_results_p11.config(state=tk.DISABLED)
+            self.lbl_status_p11.config(text=f"Erro: {str(e)}", foreground="red")
+            messagebox.showerror("Erro", error_msg)
+            import traceback
+            traceback.print_exc()
+    
+    def train_deep_regressor_p11(self):
+        """Treina o regressor profundo (imagens)"""
+        import sys
+        import io
+        
+        # Verificar se os CSVs existem
+        required_files = ["train_split.csv", "val_split.csv", "test_split.csv"]
+        missing = [f for f in required_files if not os.path.exists(f)]
+        if missing:
+            messagebox.showerror("Erro", f"Arquivos não encontrados: {missing}\n\nExecute a Parte 9 primeiro!")
+            return
+        
+        # Obter pasta de imagens
+        image_dir = self.entry_image_dir_p11.get() if hasattr(self, 'entry_image_dir_p11') else "images"
+        
+        self.lbl_status_p11.config(
+            text="Treinando Regressor Profundo... (isso pode levar vários minutos)", 
+            foreground="blue"
+        )
+        self.root.update()
+        
+        # Redirecionar stdout
+        old_stdout = sys.stdout
+        sys.stdout = buffer = io.StringIO()
+        
+        try:
+            result = self.train_deep_regressor_internal(base_image_dir=image_dir)
+            
+            output = buffer.getvalue()
+            sys.stdout = old_stdout
+            
+            # Exibir resultados
+            self.text_results_p11.config(state=tk.NORMAL)
+            self.text_results_p11.insert(tk.END, output)
+            self.text_results_p11.see(tk.END)
+            self.text_results_p11.config(state=tk.DISABLED)
+            
+            self.lbl_status_p11.config(text="✓ Regressor Profundo treinado com sucesso!", foreground="green")
+            messagebox.showinfo("Sucesso", "Regressor Profundo treinado!\n\nVerifique os arquivos gerados:\n- learning_curve_regressor_profundo.png\n- pred_vs_real_profundo.png")
+            
+        except Exception as e:
+            sys.stdout = old_stdout
+            error_msg = f"Erro ao treinar Regressor Profundo:\n{str(e)}"
+            self.text_results_p11.config(state=tk.NORMAL)
+            self.text_results_p11.insert(tk.END, f"\n{error_msg}\n")
+            self.text_results_p11.see(tk.END)
+            self.text_results_p11.config(state=tk.DISABLED)
+            self.lbl_status_p11.config(text=f"Erro: {str(e)}", foreground="red")
+            messagebox.showerror("Erro", error_msg)
+            import traceback
+            traceback.print_exc()
+    
+    def train_both_regressors_p11(self):
+        """Treina ambos os regressores"""
+        self.train_shallow_regressor_p11()
+        self.root.after(2000, self.train_deep_regressor_p11)
 
     def log(self, message):
         """ Adiciona uma mensagem ao log na GUI. """
@@ -805,6 +1465,2435 @@ class AlzheimerApp:
                            "Copie do log e cole em self.auto_seed_points no código.")
 
     # --- 3. FUNÇÕES DE CARREGAMENTO E EXIBIÇÃO ---
+    
+    # --- PARTE 8: SCATTERPLOTS ---
+    
+    def select_csv_parte8(self):
+        """Seleciona arquivo CSV para Parte 8"""
+        filename = filedialog.askopenfilename(
+            title="Selecionar CSV para Scatterplots",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        if filename:
+            self.csv_path_parte8 = filename
+            self.lbl_csv_file_p8.config(
+                text=f"Arquivo: {os.path.basename(filename)}",
+                foreground="green"
+            )
+    
+    def select_output_dir_parte8(self):
+        """Seleciona pasta de saída para os scatterplots"""
+        folder = filedialog.askdirectory(
+            title="Selecionar Pasta de Saída para Scatterplots",
+            initialdir=self.scatterplots_dir if os.path.exists(self.scatterplots_dir) else "."
+        )
+        if folder:
+            self.scatterplots_dir = folder
+            self.lbl_output_dir_p8.config(
+                text=f"Pasta: {folder}",
+                foreground="green"
+            )
+    
+    def generate_scatterplots_parte8(self):
+        """Gera scatterplots para Parte 8"""
+        if not hasattr(self, 'csv_path_parte8') or not self.csv_path_parte8:
+            messagebox.showwarning("Aviso", "Por favor, selecione um arquivo CSV primeiro.")
+            return
+        
+        try:
+            self.lbl_scatterplot_gen_status.config(text="Gerando scatterplots...", foreground="blue")
+            self.root.update()
+            
+            # Ler CSV
+            df = pd.read_csv(self.csv_path_parte8, sep=";", decimal=",")
+            
+            # Criar diretório de saída (se não existir)
+            if not os.path.exists(self.scatterplots_dir):
+                os.makedirs(self.scatterplots_dir, exist_ok=True)
+            
+            # Definir características ventriculares
+            descriptor_cols = [
+                'area', 'perimeter', 'circularity', 'eccentricity', 
+                'solidity', 'extent', 'aspect_ratio'
+            ]
+            
+            available_cols = [col for col in descriptor_cols if col in df.columns]
+            
+            if len(available_cols) < 2:
+                messagebox.showerror("Erro", "Menos de 2 características ventriculares encontradas!")
+                return
+            
+            # Converter valores para numérico
+            for col in available_cols:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # Mapear cores
+            color_map = {
+                'Converted': 'black',
+                'NonDemented': 'blue',
+                'Nondemented': 'blue',
+                'Demented': 'red'
+            }
+            
+            df['Group_normalized'] = df['Group'].str.strip()
+            
+            # Gerar pares
+            import itertools
+            pairs = list(itertools.combinations(available_cols, 2))
+            self.scatterplot_files = []
+            
+            for feat_i, feat_j in pairs:
+                valid_mask = df[[feat_i, feat_j]].notna().all(axis=1)
+                df_valid = df[valid_mask].copy()
+                
+                if len(df_valid) == 0:
+                    continue
+                
+                # Criar figura
+                fig = Figure(figsize=(8, 6))
+                ax = fig.add_subplot(111)
+                
+                # Plotar por grupo
+                for group_name, color in color_map.items():
+                    group_data = df_valid[df_valid['Group_normalized'].str.contains(group_name, case=False, na=False)]
+                    if len(group_data) > 0:
+                        ax.scatter(
+                            group_data[feat_i], 
+                            group_data[feat_j],
+                            c=color,
+                            label=group_name,
+                            alpha=0.6,
+                            s=50
+                        )
+                
+                ax.set_xlabel(feat_i.replace('_', ' ').title(), fontsize=12)
+                ax.set_ylabel(feat_j.replace('_', ' ').title(), fontsize=12)
+                ax.set_title(f'{feat_i.replace("_", " ").title()} vs {feat_j.replace("_", " ").title()}', 
+                            fontsize=14, fontweight='bold')
+                ax.legend(loc='best')
+                ax.grid(True, alpha=0.3)
+                
+                # Salvar
+                filename = f"{feat_i}_vs_{feat_j}.png"
+                filepath = os.path.join(self.scatterplots_dir, filename)
+                fig.savefig(filepath, dpi=150, bbox_inches='tight')
+                plt.close(fig)
+                
+                self.scatterplot_files.append((filepath, feat_i, feat_j))
+            
+            # Atualizar interface
+            self.listbox_scatterplots.delete(0, tk.END)
+            for filepath, feat_i, feat_j in self.scatterplot_files:
+                self.listbox_scatterplots.insert(tk.END, f"{feat_i}_vs_{feat_j}")
+            
+            if self.scatterplot_files:
+                self.current_scatterplot_index = 0
+                self.show_scatterplot(0)
+                self.btn_prev_scatter.config(state=tk.NORMAL)
+                self.btn_next_scatter.config(state=tk.NORMAL)
+            
+            self.lbl_scatterplot_gen_status.config(
+                text=f"✓ {len(self.scatterplot_files)} gráficos gerados!",
+                foreground="green"
+            )
+            messagebox.showinfo("Sucesso", f"{len(self.scatterplot_files)} scatterplots gerados com sucesso!")
+            
+        except Exception as e:
+            self.lbl_scatterplot_gen_status.config(
+                text=f"Erro: {str(e)}",
+                foreground="red"
+            )
+            messagebox.showerror("Erro", f"Erro ao gerar scatterplots:\n{str(e)}")
+    
+    def show_scatterplot(self, index):
+        """Exibe o scatterplot no índice especificado"""
+        if not self.scatterplot_files or index < 0 or index >= len(self.scatterplot_files):
+            return
+        
+        if not hasattr(self, 'scatterplot_canvas_frame'):
+            return
+        
+        try:
+            self.current_scatterplot_index = index
+            filepath, feat_i, feat_j = self.scatterplot_files[index]
+            
+            # Limpar canvas anterior de forma segura
+            try:
+                for widget in list(self.scatterplot_canvas_frame.winfo_children()):
+                    try:
+                        widget.destroy()
+                    except:
+                        pass
+            except:
+                pass
+            
+            # Carregar e exibir imagem
+            try:
+                img = Image.open(filepath)
+                img.thumbnail((800, 600), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                
+                label = ttk.Label(self.scatterplot_canvas_frame, image=photo)
+                label.image = photo  # Manter referência
+                label.pack(expand=True)
+            except Exception as img_error:
+                error_label = ttk.Label(
+                    self.scatterplot_canvas_frame, 
+                    text=f"Erro ao carregar imagem:\n{str(img_error)}",
+                    foreground="red",
+                    wraplength=400
+                )
+                error_label.pack(expand=True)
+            
+            # Atualizar informações de forma segura
+            try:
+                if hasattr(self, 'lbl_scatterplot_info'):
+                    try:
+                        if self.lbl_scatterplot_info.winfo_exists():
+                            self.lbl_scatterplot_info.config(text=f"{index + 1} / {len(self.scatterplot_files)}")
+                    except:
+                        pass
+            except:
+                pass
+            
+            try:
+                if hasattr(self, 'lbl_scatterplot_status'):
+                    try:
+                        if self.lbl_scatterplot_status.winfo_exists():
+                            self.lbl_scatterplot_status.config(
+                                text=f"{feat_i.replace('_', ' ').title()} vs {feat_j.replace('_', ' ').title()}",
+                                foreground="black"
+                            )
+                    except tk.TclError:
+                        # Widget foi destruído, recriar se necessário
+                        pass
+            except:
+                pass
+                
+        except Exception as e:
+            # Se houver erro geral, tentar mostrar na área de visualização
+            try:
+                error_label = ttk.Label(
+                    self.scatterplot_canvas_frame, 
+                    text=f"Erro ao exibir scatterplot:\n{str(e)}",
+                    foreground="red",
+                    wraplength=400
+                )
+                error_label.pack(expand=True)
+            except:
+                pass
+    
+    def show_previous_scatterplot(self):
+        """Mostra o scatterplot anterior"""
+        if self.scatterplot_files and self.current_scatterplot_index > 0:
+            self.show_scatterplot(self.current_scatterplot_index - 1)
+    
+    def show_next_scatterplot(self):
+        """Mostra o próximo scatterplot"""
+        if self.scatterplot_files and self.current_scatterplot_index < len(self.scatterplot_files) - 1:
+            self.show_scatterplot(self.current_scatterplot_index + 1)
+    
+    def on_scatterplot_select(self, event):
+        """Callback quando um scatterplot é selecionado na lista"""
+        selection = self.listbox_scatterplots.curselection()
+        if selection:
+            index = selection[0]
+            self.show_scatterplot(index)
+    
+    # --- PARTE 9: SPLIT DE DADOS ---
+    
+    def select_csv_parte9(self):
+        """Seleciona arquivo CSV para Parte 9"""
+        filename = filedialog.askopenfilename(
+            title="Selecionar CSV para Split",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        if filename:
+            self.csv_path_parte9 = filename
+            self.lbl_csv_file_p9.config(
+                text=f"Arquivo: {os.path.basename(filename)}",
+                foreground="green"
+            )
+            # Carregar DataFrame
+            try:
+                self.split_dataframe = pd.read_csv(filename, sep=";", decimal=",")
+                self.text_results_p9.config(state=tk.NORMAL)
+                self.text_results_p9.delete(1.0, tk.END)
+                self.text_results_p9.insert(tk.END, f"CSV carregado: {len(self.split_dataframe)} linhas\n")
+                self.text_results_p9.insert(tk.END, f"Colunas: {', '.join(self.split_dataframe.columns[:5])}...\n")
+                self.text_results_p9.config(state=tk.DISABLED)
+            except Exception as e:
+                messagebox.showerror("Erro", f"Erro ao carregar CSV:\n{str(e)}")
+    
+    def execute_split_parte9(self):
+        """Executa o split de dados da Parte 9"""
+        if not hasattr(self, 'split_dataframe') or self.split_dataframe is None:
+            messagebox.showwarning("Aviso", "Por favor, selecione e carregue um arquivo CSV primeiro.")
+            return
+        
+        try:
+            self.lbl_split_status.config(text="Executando split...", foreground="blue")
+            self.root.update()
+            
+            df_work = self.split_dataframe.copy()
+            
+            # Converter CDR para numérico
+            df_work['CDR'] = pd.to_numeric(df_work['CDR'], errors='coerce')
+            df_work['Group'] = df_work['Group'].str.strip()
+            
+            # Reclassificar Converted
+            converted_mask = df_work['Group'].str.contains('Converted', case=False, na=False)
+            converted_cdr0 = converted_mask & (df_work['CDR'] == 0)
+            df_work.loc[converted_cdr0, 'Group'] = 'Nondemented'
+            converted_cdr_pos = converted_mask & (df_work['CDR'] > 0)
+            df_work.loc[converted_cdr_pos, 'Group'] = 'Demented'
+            
+            df_work['Group'] = df_work['Group'].str.strip()
+            
+            # Criar coluna binária
+            def classify_binary(group_str):
+                group_lower = str(group_str).lower()
+                if 'demented' in group_lower and 'non' not in group_lower:
+                    return 'Demented'
+                elif 'nondemented' in group_lower or ('non' in group_lower and 'demented' in group_lower):
+                    return 'NonDemented'
+                else:
+                    return None
+            
+            df_work['ClassBinary'] = df_work['Group'].apply(classify_binary)
+            df_bin = df_work[df_work['ClassBinary'].isin(['Demented', 'NonDemented'])].copy()
+            
+            # Definir classe por paciente
+            def get_patient_class(class_series):
+                if 'Demented' in class_series.values:
+                    return 'Demented'
+                else:
+                    return 'NonDemented'
+            
+            patient_labels = df_bin.groupby('Subject ID')['ClassBinary'].apply(get_patient_class).reset_index()
+            patient_labels.columns = ['Subject ID', 'PatientClass']
+            
+            # Split treino/teste
+            from sklearn.model_selection import train_test_split
+            train_patients, test_patients = train_test_split(
+                patient_labels['Subject ID'].values,
+                test_size=0.2,
+                stratify=patient_labels['PatientClass'].values,
+                random_state=42
+            )
+            
+            # Split validação do treino
+            train_patient_labels = patient_labels[patient_labels['Subject ID'].isin(train_patients)]
+            train_patients_final, val_patients = train_test_split(
+                train_patient_labels['Subject ID'].values,
+                test_size=0.2,
+                stratify=train_patient_labels['PatientClass'].values,
+                random_state=42
+            )
+            
+            # Filtrar exames
+            df_train = df_bin[df_bin['Subject ID'].isin(train_patients_final)].copy()
+            df_val = df_bin[df_bin['Subject ID'].isin(val_patients)].copy()
+            df_test = df_bin[df_bin['Subject ID'].isin(test_patients)].copy()
+            
+            # Salvar CSVs
+            df_train.to_csv('train_split.csv', sep=';', decimal='.', index=False)
+            df_val.to_csv('val_split.csv', sep=';', decimal='.', index=False)
+            df_test.to_csv('test_split.csv', sep=';', decimal='.', index=False)
+            
+            # Exibir resultados
+            self.text_results_p9.config(state=tk.NORMAL)
+            self.text_results_p9.delete(1.0, tk.END)
+            self.text_results_p9.insert(tk.END, "=" * 60 + "\n")
+            self.text_results_p9.insert(tk.END, "RESULTADOS DO SPLIT\n")
+            self.text_results_p9.insert(tk.END, "=" * 60 + "\n\n")
+            
+            self.text_results_p9.insert(tk.END, "TREINO:\n")
+            self.text_results_p9.insert(tk.END, f"  Exames: {len(df_train)}\n")
+            self.text_results_p9.insert(tk.END, f"  Pacientes: {df_train['Subject ID'].nunique()}\n")
+            self.text_results_p9.insert(tk.END, f"  Demented: {len(df_train[df_train['ClassBinary'] == 'Demented'])} exames\n")
+            self.text_results_p9.insert(tk.END, f"  NonDemented: {len(df_train[df_train['ClassBinary'] == 'NonDemented'])} exames\n")
+            train_patients_classes = df_train.groupby('Subject ID')['ClassBinary'].apply(get_patient_class)
+            self.text_results_p9.insert(tk.END, f"  Pacientes Demented: {len(train_patients_classes[train_patients_classes == 'Demented'])}\n")
+            self.text_results_p9.insert(tk.END, f"  Pacientes NonDemented: {len(train_patients_classes[train_patients_classes == 'NonDemented'])}\n\n")
+            
+            self.text_results_p9.insert(tk.END, "VALIDAÇÃO:\n")
+            self.text_results_p9.insert(tk.END, f"  Exames: {len(df_val)}\n")
+            self.text_results_p9.insert(tk.END, f"  Pacientes: {df_val['Subject ID'].nunique()}\n")
+            self.text_results_p9.insert(tk.END, f"  Demented: {len(df_val[df_val['ClassBinary'] == 'Demented'])} exames\n")
+            self.text_results_p9.insert(tk.END, f"  NonDemented: {len(df_val[df_val['ClassBinary'] == 'NonDemented'])} exames\n")
+            val_patients_classes = df_val.groupby('Subject ID')['ClassBinary'].apply(get_patient_class)
+            self.text_results_p9.insert(tk.END, f"  Pacientes Demented: {len(val_patients_classes[val_patients_classes == 'Demented'])}\n")
+            self.text_results_p9.insert(tk.END, f"  Pacientes NonDemented: {len(val_patients_classes[val_patients_classes == 'NonDemented'])}\n\n")
+            
+            self.text_results_p9.insert(tk.END, "TESTE:\n")
+            self.text_results_p9.insert(tk.END, f"  Exames: {len(df_test)}\n")
+            self.text_results_p9.insert(tk.END, f"  Pacientes: {df_test['Subject ID'].nunique()}\n")
+            self.text_results_p9.insert(tk.END, f"  Demented: {len(df_test[df_test['ClassBinary'] == 'Demented'])} exames\n")
+            self.text_results_p9.insert(tk.END, f"  NonDemented: {len(df_test[df_test['ClassBinary'] == 'NonDemented'])} exames\n")
+            test_patients_classes = df_test.groupby('Subject ID')['ClassBinary'].apply(get_patient_class)
+            self.text_results_p9.insert(tk.END, f"  Pacientes Demented: {len(test_patients_classes[test_patients_classes == 'Demented'])}\n")
+            self.text_results_p9.insert(tk.END, f"  Pacientes NonDemented: {len(test_patients_classes[test_patients_classes == 'NonDemented'])}\n\n")
+            
+            # Verificar vazamento
+            train_ids = set(df_train['Subject ID'].unique())
+            val_ids = set(df_val['Subject ID'].unique())
+            test_ids = set(df_test['Subject ID'].unique())
+            
+            self.text_results_p9.insert(tk.END, "VERIFICAÇÃO DE VAZAMENTO:\n")
+            if train_ids & val_ids:
+                self.text_results_p9.insert(tk.END, "  [ERRO] Vazamento entre treino e validação!\n")
+            else:
+                self.text_results_p9.insert(tk.END, "  [OK] Sem vazamento entre treino e validação\n")
+            
+            if train_ids & test_ids:
+                self.text_results_p9.insert(tk.END, "  [ERRO] Vazamento entre treino e teste!\n")
+            else:
+                self.text_results_p9.insert(tk.END, "  [OK] Sem vazamento entre treino e teste\n")
+            
+            if val_ids & test_ids:
+                self.text_results_p9.insert(tk.END, "  [ERRO] Vazamento entre validação e teste!\n")
+            else:
+                self.text_results_p9.insert(tk.END, "  [OK] Sem vazamento entre validação e teste\n")
+            
+            self.text_results_p9.insert(tk.END, "\n" + "=" * 60 + "\n")
+            self.text_results_p9.insert(tk.END, "Arquivos salvos:\n")
+            self.text_results_p9.insert(tk.END, "  - train_split.csv\n")
+            self.text_results_p9.insert(tk.END, "  - val_split.csv\n")
+            self.text_results_p9.insert(tk.END, "  - test_split.csv\n")
+            
+            self.text_results_p9.config(state=tk.DISABLED)
+            self.lbl_split_status.config(text="✓ Split concluído com sucesso!", foreground="green")
+            messagebox.showinfo("Sucesso", "Split de dados concluído!\n\nArquivos salvos:\n- train_split.csv\n- val_split.csv\n- test_split.csv")
+            
+        except Exception as e:
+            self.lbl_split_status.config(text=f"Erro: {str(e)}", foreground="red")
+            self.text_results_p9.config(state=tk.NORMAL)
+            self.text_results_p9.insert(tk.END, f"\nERRO: {str(e)}\n")
+            self.text_results_p9.config(state=tk.DISABLED)
+            messagebox.showerror("Erro", f"Erro ao executar split:\n{str(e)}")
+    
+    # --- PARTE 10: CLASSIFICADORES ---
+    
+    def browse_image_dir_resnet(self):
+        """Seleciona pasta de imagens para ResNet50"""
+        folder = filedialog.askdirectory(
+            title="Selecionar Pasta de Imagens",
+            initialdir=self.entry_image_dir_resnet.get() if hasattr(self, 'entry_image_dir_resnet') else "."
+        )
+        if folder:
+            self.entry_image_dir_resnet.delete(0, tk.END)
+            self.entry_image_dir_resnet.insert(0, folder)
+    
+    def train_xgb_parte10(self):
+        """Treina o classificador XGBoost"""
+        import sys
+        import io
+        
+        # Verificar se os CSVs existem
+        required_files = ["train_split.csv", "val_split.csv", "test_split.csv"]
+        missing = [f for f in required_files if not os.path.exists(f)]
+        if missing:
+            messagebox.showerror("Erro", f"Arquivos não encontrados: {missing}\n\nExecute a Parte 9 primeiro!")
+            return
+        
+        self.lbl_status_p10.config(
+            text="Treinando XGBoost com Random Search... (isso pode levar alguns minutos)", 
+            foreground="blue"
+        )
+        self.root.update()
+        
+        # Redirecionar stdout para capturar prints
+        old_stdout = sys.stdout
+        sys.stdout = buffer = io.StringIO()
+        
+        try:
+            # Executar método da classe
+            self.train_xgboost_classifier_internal()
+            
+            # Capturar output
+            output = buffer.getvalue()
+            
+            # Restaurar stdout
+            sys.stdout = old_stdout
+            
+            # Exibir resultados
+            self.text_results_p10.config(state=tk.NORMAL)
+            self.text_results_p10.insert(tk.END, output)
+            self.text_results_p10.see(tk.END)
+            self.text_results_p10.config(state=tk.DISABLED)
+            
+            self.lbl_status_p10.config(text="✓ XGBoost treinado com sucesso! (Random Search concluído)", foreground="green")
+            messagebox.showinfo(
+                "Sucesso", 
+                "XGBoost treinado com Random Search!\n\n"
+                "Os melhores hiperparâmetros foram encontrados automaticamente.\n\n"
+                "Arquivos gerados:\n"
+                "- learning_curve_xgb.png\n"
+                "- confusion_xgb.png"
+            )
+            
+        except Exception as e:
+            sys.stdout = old_stdout
+            error_msg = f"Erro ao treinar XGBoost:\n{str(e)}"
+            self.text_results_p10.config(state=tk.NORMAL)
+            self.text_results_p10.insert(tk.END, f"\n{error_msg}\n")
+            self.text_results_p10.see(tk.END)
+            self.text_results_p10.config(state=tk.DISABLED)
+            self.lbl_status_p10.config(text=f"Erro: {str(e)}", foreground="red")
+            messagebox.showerror("Erro", error_msg)
+            import traceback
+            traceback.print_exc()
+    
+    def train_resnet_parte10(self):
+        """Treina o classificador ResNet50"""
+        import sys
+        import io
+        
+        # Verificar se os CSVs existem
+        required_files = ["train_split.csv", "val_split.csv", "test_split.csv"]
+        missing = [f for f in required_files if not os.path.exists(f)]
+        if missing:
+            messagebox.showerror("Erro", f"Arquivos não encontrados: {missing}\n\nExecute a Parte 9 primeiro!")
+            return
+        
+        # Obter pasta de imagens
+        image_dir = self.entry_image_dir_resnet.get() if hasattr(self, 'entry_image_dir_resnet') else "images"
+        
+        self.lbl_status_resnet.config(text="Treinando ResNet50... (isso pode levar vários minutos)", foreground="blue")
+        self.root.update()
+        
+        # Redirecionar stdout
+        old_stdout = sys.stdout
+        sys.stdout = buffer = io.StringIO()
+        
+        try:
+            # Executar método da classe
+            self.train_resnet50_classifier_internal(base_image_dir=image_dir)
+            
+            # Capturar output
+            output = buffer.getvalue()
+            
+            # Restaurar stdout
+            sys.stdout = old_stdout
+            
+            # Exibir resultados
+            self.text_results_resnet.config(state=tk.NORMAL)
+            self.text_results_resnet.insert(tk.END, output)
+            self.text_results_resnet.see(tk.END)
+            self.text_results_resnet.config(state=tk.DISABLED)
+            
+            self.lbl_status_resnet.config(text="✓ ResNet50 treinado com sucesso!", foreground="green")
+            messagebox.showinfo("Sucesso", "ResNet50 treinado!\n\nVerifique os arquivos gerados:\n- learning_curve_resnet50.png\n- confusion_resnet50.png")
+            
+        except Exception as e:
+            sys.stdout = old_stdout
+            error_msg = f"Erro ao treinar ResNet50:\n{str(e)}"
+            self.text_results_resnet.config(state=tk.NORMAL)
+            self.text_results_resnet.insert(tk.END, f"\n{error_msg}\n")
+            self.text_results_resnet.see(tk.END)
+            self.text_results_resnet.config(state=tk.DISABLED)
+            self.lbl_status_resnet.config(text=f"Erro: {str(e)}", foreground="red")
+            messagebox.showerror("Erro", error_msg + "\n\nVerifique se a pasta de imagens está correta.")
+            import traceback
+            traceback.print_exc()
+    
+    
+    # ============================================================================
+    # MÉTODOS INTERNOS DA PARTE 10 - CLASSIFICADORES
+    # ============================================================================
+    
+    def find_image_path_column_p10(self, df):
+        """Encontra automaticamente a coluna que contém o caminho das imagens"""
+        possible_cols = ["filepath", "path", "image_path", "ImagePath", "filename", "FileName", "Image Path"]
+        
+        for col in possible_cols:
+            if col in df.columns:
+                return col
+        
+        return None
+    
+    def get_image_path_p10(self, row, df, base_image_dir="images"):
+        """
+        Determina o caminho da imagem para uma linha do DataFrame.
+        Tenta várias estratégias automaticamente.
+        """
+        # Estratégia 1: Coluna explícita de caminho
+        path_col = self.find_image_path_column_p10(df)
+        if path_col:
+            path = row[path_col]
+            if pd.notna(path) and path:
+                if os.path.exists(path):
+                    return path
+                # Tentar com base_image_dir
+                full_path = os.path.join(base_image_dir, os.path.basename(path))
+                if os.path.exists(full_path):
+                    return full_path
+        
+        # Estratégia 2: Usar MRI ID ou Image Data ID
+        id_cols = ["MRI ID", "MRI_ID", "Image Data ID", "ImageDataID", "ImageID"]
+        for col in id_cols:
+            if col in df.columns:
+                img_id = row[col]
+                if pd.notna(img_id):
+                    img_id_str = str(img_id).strip()
+                    
+                    # Lista de sufixos comuns em imagens médicas (axl=axial, cor=coronal, sag=sagittal)
+                    suffixes = ['_axl', '_cor', '_sag', '_axial', '_coronal', '_sagittal', 
+                               '_ax', '_axl_', '_cor_', '_sag_']
+                    
+                    # Tentar diferentes extensões
+                    for ext in ['.nii', '.nii.gz', '.png', '.jpg', '.jpeg']:
+                        # 1. Tentar nome exato
+                        path = os.path.join(base_image_dir, f"{img_id_str}{ext}")
+                        if os.path.exists(path):
+                            return path
+                        
+                        # 2. Tentar com sufixos comuns (ex: OAS2_0164_MR1_axl.nii)
+                        for suffix in suffixes:
+                            path = os.path.join(base_image_dir, f"{img_id_str}{suffix}{ext}")
+                            if os.path.exists(path):
+                                return path
+                        
+                        # 3. Tentar com sufixo antes da extensão (caso o nome já tenha extensão)
+                        if ext in img_id_str:
+                            base_name = img_id_str.replace(ext, '')
+                            for suffix in suffixes:
+                                path = os.path.join(base_image_dir, f"{base_name}{suffix}{ext}")
+                                if os.path.exists(path):
+                                    return path
+                    
+                    # 4. Tentar sem extensão (arquivo pode não ter extensão no nome)
+                    path = os.path.join(base_image_dir, img_id_str)
+                    if os.path.exists(path):
+                        return path
+                    
+                    # 5. Tentar com sufixos sem extensão
+                    for suffix in suffixes:
+                        path = os.path.join(base_image_dir, f"{img_id_str}{suffix}")
+                        if os.path.exists(path):
+                            return path
+                    
+                    # 6. Buscar arquivos que começam com o MRI ID (busca mais flexível)
+                    try:
+                        if os.path.exists(base_image_dir):
+                            for file in os.listdir(base_image_dir):
+                                # Verificar se o arquivo começa com o MRI ID
+                                if file.startswith(img_id_str):
+                                    full_path = os.path.join(base_image_dir, file)
+                                    if os.path.isfile(full_path):
+                                        # Verificar se é um formato suportado
+                                        if any(file.lower().endswith(ext) for ext in ['.nii', '.nii.gz', '.png', '.jpg', '.jpeg']):
+                                            return full_path
+                    except (OSError, PermissionError):
+                        pass  # Ignorar erros de permissão
+        
+        return None
+    
+    def load_and_preprocess_image_p10(self, image_path, target_size=(224, 224), use_preprocess_input=True, num_slices=3):
+        """
+        Carrega e pré-processa uma imagem para o ResNet50 com normalização melhorada.
+        Suporta formatos: .png, .jpg, .jpeg, .nii, .nii.gz
+        Para imagens NIfTI 3D, extrai múltiplos slices (central ± offset) para aumentar sinal.
+        Aplica normalização de intensidade (clipping p1-p99) e preprocess_input do ResNet50.
+        
+        Args:
+            image_path: Caminho da imagem
+            target_size: Tamanho de saída (224, 224)
+            use_preprocess_input: Se True, aplica preprocess_input do ResNet50
+            num_slices: Número de slices para NIfTI (1 = apenas central, 3 = central ±2)
+        """
+        try:
+            if image_path.endswith(('.nii', '.nii.gz')):
+                # Carregar arquivo NIfTI
+                nii_img = nib.load(image_path)
+                img_data = nii_img.get_fdata().astype(np.float32)
+                
+                # Processar diferentes dimensões
+                if len(img_data.shape) == 4:
+                    # 4D: (x, y, z, time) - pegar primeiro volume
+                    img_data = img_data[:, :, :, 0]
+                
+                if len(img_data.shape) == 3:
+                    # 3D: (x, y, z) - extrair múltiplos slices AXIAL (eixo z)
+                    # Para slice axial, pegamos img_data[:, :, z_idx]
+                    central_slice_idx = img_data.shape[2] // 2
+                    
+                    if num_slices == 3:
+                        # Pegar 3 slices axiais: central-2, central, central+2
+                        slice_indices = [
+                            max(0, central_slice_idx - 2),
+                            central_slice_idx,
+                            min(img_data.shape[2] - 1, central_slice_idx + 2)
+                        ]
+                        slices = [img_data[:, :, idx] for idx in slice_indices]
+                    elif num_slices == 5:
+                        # Opcional: 5 slices axiais para média de predição
+                        slice_indices = [
+                            max(0, central_slice_idx - 4),
+                            max(0, central_slice_idx - 2),
+                            central_slice_idx,
+                            min(img_data.shape[2] - 1, central_slice_idx + 2),
+                            min(img_data.shape[2] - 1, central_slice_idx + 4)
+                        ]
+                        slices = [img_data[:, :, idx] for idx in slice_indices]
+                    else:
+                        # Apenas slice axial central (compatibilidade)
+                        slice_idx = img_data.shape[2] // 2
+                        img_data = img_data[:, :, slice_idx]
+                        # Normalizar cada slice separadamente antes de empilhar
+                        normalized_slices = []
+                        for slice_data in slices:
+                            p1 = np.percentile(slice_data, 1)
+                            p99 = np.percentile(slice_data, 99)
+                            if p99 > p1:
+                                slice_norm = np.clip(slice_data, p1, p99)
+                                slice_norm = (slice_norm - p1) / (p99 - p1 + 1e-8)
+                            else:
+                                slice_min = np.min(slice_data)
+                                slice_max = np.max(slice_data)
+                                if slice_max > slice_min:
+                                    slice_norm = (slice_data - slice_min) / (slice_max - slice_min + 1e-8)
+                                else:
+                                    slice_norm = np.zeros_like(slice_data)
+                            normalized_slices.append(slice_norm)
+                        # Empilhar como canais RGB (3 ou 5 slices = 3 ou 5 canais)
+                        # Se 5 slices, usar apenas os 3 primeiros canais (ou média)
+                        if len(normalized_slices) == 5:
+                            # Opção 1: Usar apenas 3 slices (primeiro, central, último)
+                            img_data = np.stack([normalized_slices[0], normalized_slices[2], normalized_slices[4]], axis=-1)
+                        else:
+                            img_data = np.stack(normalized_slices, axis=-1)
+                elif len(img_data.shape) == 2:
+                    # 2D: já está no formato correto, replicar para 3 canais depois
+                    pass
+                else:
+                    print(f"  Aviso: Formato NIfTI não suportado (dimensões: {img_data.shape})")
+                    return None
+                
+                # Se ainda não tem 3 canais (caso num_slices=1 ou 2D), normalizar e replicar
+                if len(img_data.shape) == 2:
+                    # Normalização de intensidade: clipping p1-p99 e min-max para [0,1]
+                    p1 = np.percentile(img_data, 1)
+                    p99 = np.percentile(img_data, 99)
+                    if p99 > p1:
+                        img_data = np.clip(img_data, p1, p99)
+                        img_data = (img_data - p1) / (p99 - p1 + 1e-8)
+                    else:
+                        # Fallback: normalização min-max
+                        img_min = np.min(img_data)
+                        img_max = np.max(img_data)
+                        if img_max > img_min:
+                            img_data = (img_data - img_min) / (img_max - img_min + 1e-8)
+                        else:
+                            img_data = np.zeros_like(img_data)
+                    # Replicar para 3 canais
+                    img_data = np.stack([img_data, img_data, img_data], axis=-1)
+                elif len(img_data.shape) == 3 and img_data.shape[2] != 3:
+                    # Se tem 3 dimensões mas não 3 canais, normalizar e replicar
+                    p1 = np.percentile(img_data, 1)
+                    p99 = np.percentile(img_data, 99)
+                    if p99 > p1:
+                        img_data = np.clip(img_data, p1, p99)
+                        img_data = (img_data - p1) / (p99 - p1 + 1e-8)
+                    else:
+                        img_min = np.min(img_data)
+                        img_max = np.max(img_data)
+                        if img_max > img_min:
+                            img_data = (img_data - img_min) / (img_max - img_min + 1e-8)
+                        else:
+                            img_data = np.zeros_like(img_data)
+                    # Replicar para 3 canais
+                    img_data = np.stack([img_data, img_data, img_data], axis=-1)
+                else:
+                    # Já tem 3 canais (de múltiplos slices), normalização já foi feita por slice
+                    pass
+                
+                # Normalização de intensidade: clipping p1-p99 e min-max para [0,1]
+                p1 = np.percentile(img_data, 1)
+                p99 = np.percentile(img_data, 99)
+                if p99 > p1:
+                    img_data = np.clip(img_data, p1, p99)
+                    img_data = (img_data - p1) / (p99 - p1 + 1e-8)
+                else:
+                    # Fallback: normalização min-max
+                    img_min = np.min(img_data)
+                    img_max = np.max(img_data)
+                    if img_max > img_min:
+                        img_data = (img_data - img_min) / (img_max - img_min + 1e-8)
+                    else:
+                        img_data = np.zeros_like(img_data)
+                
+                # Redimensionar para 224x224 usando PIL (mais compatível)
+                # Se já tem 3 canais (de múltiplos slices), redimensionar cada canal
+                if img_data.shape[2] == 3:
+                    # Redimensionar cada canal separadamente
+                    resized_channels = []
+                    for c in range(3):
+                        img_2d = img_data[:, :, c]
+                        img_pil = Image.fromarray((img_2d * 255).astype(np.uint8), mode='L')
+                        img_pil = img_pil.resize(target_size, Image.Resampling.LANCZOS)
+                        resized_channels.append(np.array(img_pil).astype(np.float32) / 255.0)
+                    img_data = np.stack(resized_channels, axis=-1)
+                else:
+                    # Fallback: replicar para 3 canais
+                    img_2d = img_data[:, :, 0] if len(img_data.shape) == 3 else img_data
+                    img_pil = Image.fromarray((img_2d * 255).astype(np.uint8), mode='L')
+                    img_pil = img_pil.resize(target_size, Image.Resampling.LANCZOS)
+                    img_resized = np.array(img_pil).astype(np.float32) / 255.0
+                    img_data = np.stack([img_resized, img_resized, img_resized], axis=-1)
+                
+                # Converter para float32 [0, 1]
+                img_array = img_data.astype(np.float32)
+                
+                # Aplicar preprocess_input do ResNet50 (converte de [0,1] para formato ImageNet)
+                if use_preprocess_input:
+                    from tensorflow.keras.applications.resnet50 import preprocess_input
+                    # preprocess_input espera valores em [0, 255], então multiplicamos
+                    img_array = (img_array * 255.0).astype(np.uint8)
+                    img_array = preprocess_input(img_array)
+                else:
+                    # Normalização ImageNet manual
+                    mean = np.array([0.485, 0.456, 0.406])
+                    std = np.array([0.229, 0.224, 0.225])
+                    img_array = (img_array - mean) / std
+                
+            else:
+                # Carregar imagem normal (PNG, JPG, etc.)
+                img = Image.open(image_path).convert('RGB')
+                img = img.resize(target_size, Image.Resampling.LANCZOS)
+                img_array = np.array(img).astype(np.float32)
+                
+                # Aplicar preprocess_input do ResNet50
+                if use_preprocess_input:
+                    from tensorflow.keras.applications.resnet50 import preprocess_input
+                    img_array = preprocess_input(img_array)
+                else:
+                    # Normalização ImageNet manual
+                    img_array = img_array / 255.0
+                    mean = np.array([0.485, 0.456, 0.406])
+                    std = np.array([0.229, 0.224, 0.225])
+                    img_array = (img_array - mean) / std
+            
+            return img_array.astype(np.float32)
+        except Exception as e:
+            print(f"Erro ao carregar imagem {image_path}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def train_xgboost_classifier_internal(self):
+        """Treina e avalia o classificador XGBoost (método interno)"""
+        print("\n" + "="*70)
+        print("CLASSIFICADOR RASO (XGBOOST)")
+        print("="*70)
+        
+        # Ler CSVs
+        print("\n1. Carregando dados...")
+        train_df = pd.read_csv("train_split.csv", sep=";", decimal=".")
+        val_df = pd.read_csv("val_split.csv", sep=";", decimal=".")
+        test_df = pd.read_csv("test_split.csv", sep=";", decimal=".")
+        
+        print(f"   Treino: {len(train_df)} exames")
+        print(f"   Validação: {len(val_df)} exames")
+        print(f"   Teste: {len(test_df)} exames")
+        
+        # Features base
+        base_features = ["area", "perimeter", "eccentricity", "extent", "solidity"]
+        
+        # Verificar quais features existem
+        available_features = [f for f in base_features if f in train_df.columns]
+        missing_features = [f for f in base_features if f not in train_df.columns]
+        
+        if missing_features:
+            print(f"   Aviso: Features não encontradas: {missing_features}")
+        print(f"   Features usadas: {available_features}")
+        
+        if not available_features:
+            print("   ERRO: Nenhuma feature disponível!")
+            return
+        
+        # Preparar dados
+        X_train = train_df[available_features].copy()
+        X_val = val_df[available_features].copy()
+        X_test = test_df[available_features].copy()
+        
+        # Converter para numérico
+        for col in available_features:
+            X_train[col] = pd.to_numeric(X_train[col], errors='coerce')
+            X_val[col] = pd.to_numeric(X_val[col], errors='coerce')
+            X_test[col] = pd.to_numeric(X_test[col], errors='coerce')
+        
+        # Preencher NaN com média
+        X_train = X_train.fillna(X_train.mean())
+        X_val = X_val.fillna(X_train.mean())
+        X_test = X_test.fillna(X_train.mean())
+        
+        # Target: ClassBinary -> 0/1
+        y_train = (train_df['ClassBinary'] == 'Demented').astype(int)
+        y_val = (val_df['ClassBinary'] == 'Demented').astype(int)
+        y_test = (test_df['ClassBinary'] == 'Demented').astype(int)
+        
+        print(f"\n2. Distribuição de classes:")
+        print(f"   Treino - NonDemented: {sum(y_train == 0)}, Demented: {sum(y_train == 1)}")
+        print(f"   Validação - NonDemented: {sum(y_val == 0)}, Demented: {sum(y_val == 1)}")
+        print(f"   Teste - NonDemented: {sum(y_test == 0)}, Demented: {sum(y_test == 1)}")
+        
+        # Normalizar dados (importante para melhor performance)
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_val_scaled = scaler.transform(X_val)
+        X_test_scaled = scaler.transform(X_test)
+        
+        # Converter de volta para DataFrame para manter nomes das colunas
+        X_train_scaled = pd.DataFrame(X_train_scaled, columns=available_features, index=X_train.index)
+        X_val_scaled = pd.DataFrame(X_val_scaled, columns=available_features, index=X_val.index)
+        X_test_scaled = pd.DataFrame(X_test_scaled, columns=available_features, index=X_test.index)
+        
+        # Calcular scale_pos_weight para balanceamento
+        pos_weight = sum(y_train == 0) / sum(y_train == 1) if sum(y_train == 1) > 0 else 1.0
+        print(f"\n3. scale_pos_weight calculado: {pos_weight:.2f}")
+        print("   Dados normalizados com StandardScaler")
+        
+        # Random Search para otimizar hiperparâmetros
+        # IMPORTANTE: Usar apenas treino, não combinar com validação!
+        print("\n4. Executando Random Search para otimizar hiperparâmetros...")
+        print("   (Isso pode levar alguns minutos - testando 100 combinações com 3-fold CV)...")
+        
+        # Definir espaço de busca de parâmetros MELHORADO
+        # n_estimators limitado a 400 para evitar travamento
+        param_grid = {
+            'n_estimators': [200, 300, 400],  # Máximo 400 para não travar
+            'learning_rate': [0.01, 0.02, 0.05],
+            'max_depth': [2, 3, 4, 5],
+            'subsample': [0.7, 0.8, 0.9],
+            'colsample_bytree': [0.7, 0.8, 0.9],
+            'min_child_weight': [1, 2, 3],
+            'gamma': [0, 0.05, 0.1],
+            'reg_alpha': [0, 0.1, 0.5],
+            'reg_lambda': [1, 1.5, 2.0]
+        }
+        
+        # Modelo base (booster padrão gbtree)
+        base_model = xgb.XGBClassifier(
+            eval_metric='logloss',
+            scale_pos_weight=pos_weight,
+            random_state=42,
+            n_jobs=-1
+        )
+        
+        # Random Search com validação cruzada
+        # Usar 'roc_auc' ou 'f1' em vez de 'accuracy' para melhor generalização
+        random_search = RandomizedSearchCV(
+            estimator=base_model,
+            param_distributions=param_grid,
+            n_iter=100,  # Voltou para 100 iterações
+            scoring='roc_auc',  # ROC-AUC é melhor para problemas desbalanceados
+            cv=3,  # Mantido em 3-fold para não travar
+            n_jobs=-1,
+            random_state=42,
+            verbose=1,
+            refit=True
+        )
+        
+        # Usar APENAS treino no Random Search
+        random_search.fit(X_train_scaled, y_train)
+        
+        # Melhores parâmetros encontrados
+        best_params = random_search.best_params_
+        best_score = random_search.best_score_
+        
+        print(f"\n   ✓ Random Search concluído!")
+        print(f"   Melhor ROC-AUC (CV): {best_score:.4f} ({best_score*100:.2f}%)")
+        print(f"   Melhores parâmetros encontrados:")
+        for param, value in sorted(best_params.items()):
+            print(f"     • {param}: {value}")
+        
+        # Treinar XGBoost com os melhores parâmetros e EARLY STOPPING
+        print("\n5. Treinando XGBoost com os melhores parâmetros e early stopping...")
+        
+        # Usar n_estimators do melhor modelo encontrado (ou máximo se não especificado)
+        # Limitar a 400 para não travar (early stopping vai parar antes se necessário)
+        n_estimators_final = min(best_params.get('n_estimators', 300), 400)
+        
+        # Criar modelo com parâmetros otimizados (booster padrão gbtree)
+        model = xgb.XGBClassifier(
+            n_estimators=n_estimators_final,
+            learning_rate=best_params.get('learning_rate', 0.01),
+            max_depth=best_params.get('max_depth', 4),
+            subsample=best_params.get('subsample', 0.8),
+            colsample_bytree=best_params.get('colsample_bytree', 0.8),
+            min_child_weight=best_params.get('min_child_weight', 1),
+            gamma=best_params.get('gamma', 0),
+            reg_alpha=best_params.get('reg_alpha', 0),
+            reg_lambda=best_params.get('reg_lambda', 1),
+            eval_metric='logloss',
+            scale_pos_weight=pos_weight,
+            random_state=42,
+            n_jobs=-1
+        )
+        
+        # Treinar com histórico e early stopping
+        # Nota: XGBoost 3.x usa callbacks para early stopping
+        eval_set = [(X_train_scaled, y_train), (X_val_scaled, y_val)]
+        
+        try:
+            # Tentar usar callback (XGBoost 3.x)
+            from xgboost.callback import EarlyStopping
+            early_stop = EarlyStopping(
+                rounds=50,  # Para após 50 rounds sem melhoria
+                save_best=True,
+                maximize=False,  # Minimizar logloss
+                min_delta=0.001
+            )
+            model.fit(
+                X_train_scaled, y_train,
+                eval_set=eval_set,
+                callbacks=[early_stop],
+                verbose=False
+            )
+            # Usar o melhor número de estimadores encontrado pelo early stopping
+            best_iteration = getattr(model, 'best_iteration', None)
+            if best_iteration is None:
+                best_iteration = n_estimators_final
+        except (ImportError, AttributeError, TypeError):
+            # Fallback para versões antigas ou se callback não funcionar
+            # Usar n_estimators menor para evitar overfitting
+            n_estimators_safe = min(n_estimators_final, 400)
+            model = xgb.XGBClassifier(
+                n_estimators=n_estimators_safe,
+                learning_rate=best_params.get('learning_rate', 0.01),
+                max_depth=best_params.get('max_depth', 4),
+                subsample=best_params.get('subsample', 0.8),
+                colsample_bytree=best_params.get('colsample_bytree', 0.8),
+                min_child_weight=best_params.get('min_child_weight', 1),
+                gamma=best_params.get('gamma', 0),
+                reg_alpha=best_params.get('reg_alpha', 0),
+                reg_lambda=best_params.get('reg_lambda', 1),
+                eval_metric='logloss',
+                scale_pos_weight=pos_weight,
+                random_state=42,
+                n_jobs=-1
+            )
+            model.fit(
+                X_train_scaled, y_train,
+                eval_set=eval_set,
+                verbose=False
+            )
+            best_iteration = n_estimators_safe
+        
+        print(f"   Melhor iteração encontrada: {best_iteration}")
+        
+        # Extrair histórico de logloss
+        results = model.evals_result()
+        train_logloss = results['validation_0']['logloss']
+        val_logloss = results['validation_1']['logloss']
+        
+        # Plotar curva de aprendizado usando logloss diretamente (muito mais rápido)
+        # NÃO treinar múltiplos modelos temporários - isso é muito lento!
+        print("\n6. Gerando gráfico de aprendizado...")
+        print("   Usando histórico de logloss (sem treinar modelos adicionais)")
+        
+        plt.figure(figsize=(10, 6))
+        
+        # Amostrar pontos do logloss para não sobrecarregar o gráfico
+        step_loss = max(1, len(train_logloss) // 30)  # Apenas 30 pontos
+        indices = list(range(0, len(train_logloss), step_loss))
+        if indices[-1] != len(train_logloss) - 1:
+            indices.append(len(train_logloss) - 1)
+        
+        plt.plot([i+1 for i in indices], [train_logloss[i] for i in indices], 
+                label='Treino (LogLoss)', marker='o', markersize=3, linewidth=1.5)
+        plt.plot([i+1 for i in indices], [val_logloss[i] for i in indices], 
+                label='Validação (LogLoss)', marker='s', markersize=3, linewidth=1.5)
+        
+        plt.xlabel('Iteração (Boosting Round)', fontsize=12)
+        plt.ylabel('LogLoss (menor é melhor)', fontsize=12)
+        plt.title('Curva de Aprendizado - XGBoost', fontsize=14, fontweight='bold')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig('learning_curve_xgb.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        print("   Salvo: learning_curve_xgb.png")
+        
+        # Avaliar no teste
+        print("\n7. Avaliando no conjunto de teste...")
+        y_test_pred = model.predict(X_test_scaled)
+        
+        accuracy = accuracy_score(y_test, y_test_pred)
+        sensitivity = recall_score(y_test, y_test_pred)  # Recall da classe positiva (Demented)
+        cm = confusion_matrix(y_test, y_test_pred)
+        
+        # Especificidade = TN / (TN + FP)
+        tn, fp, fn, tp = cm.ravel()
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+        
+        # Plotar matriz de confusão
+        plt.figure(figsize=(8, 6))
+        if HAS_SEABORN:
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                        xticklabels=['NonDemented', 'Demented'],
+                        yticklabels=['NonDemented', 'Demented'])
+        else:
+            # Usar matplotlib se seaborn não estiver disponível
+            plt.imshow(cm, interpolation='nearest', cmap='Blues')
+            plt.colorbar()
+            tick_marks = np.arange(2)
+            plt.xticks(tick_marks, ['NonDemented', 'Demented'])
+            plt.yticks(tick_marks, ['NonDemented', 'Demented'])
+            thresh = cm.max() / 2.
+            for i, j in np.ndindex(cm.shape):
+                plt.text(j, i, format(cm[i, j], 'd'),
+                        horizontalalignment="center",
+                        color="white" if cm[i, j] > thresh else "black")
+        plt.ylabel('Verdadeiro', fontsize=12)
+        plt.xlabel('Predito', fontsize=12)
+        plt.title('Matriz de Confusão - XGBoost (Teste)', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig('confusion_xgb.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        print("   Salvo: confusion_xgb.png")
+        
+        # Exibir resultados
+        print("\n" + "="*70)
+        print("=== CLASSIFICADOR RASO (XGBOOST) - TESTE ===")
+        print("="*70)
+        print(f"Parâmetros otimizados via Random Search (100 iterações, 3-fold CV, ROC-AUC)")
+        print(f"Melhor ROC-AUC (CV): {best_score:.4f} ({best_score*100:.2f}%)")
+        print(f"\nResultados no conjunto de TESTE:")
+        print(f"  Acurácia: {accuracy:.4f} ({accuracy*100:.2f}%)")
+        print(f"  Sensibilidade (Recall Demented): {sensitivity:.4f} ({sensitivity*100:.2f}%)")
+        print(f"  Especificidade: {specificity:.4f} ({specificity*100:.2f}%)")
+        print(f"\nConfusion Matrix:")
+        print(f"[[{tn:4d} {fp:4d}]  <- NonDemented")
+        print(f" [{fn:4d} {tp:4d}]]  <- Demented")
+        print("="*70 + "\n")
+        
+        return model, accuracy, sensitivity, specificity
+    
+    def focal_loss_binary(self, alpha=0.75, gamma=2.0):
+        """
+        Implementa Focal Loss binária para lidar com classes desbalanceadas.
+        Focal Loss reduz o peso de exemplos fáceis e foca em exemplos difíceis.
+        
+        Args:
+            alpha: Peso para a classe positiva (Demented). alpha=0.75 favorece Demented.
+            gamma: Fator de foco. gamma=2.0 é um valor padrão eficaz.
+        """
+        def focal_loss_fixed(y_true, y_pred):
+            # Converter y_true para float32
+            y_true = tf.cast(y_true, tf.float32)
+            y_pred = tf.cast(y_pred, tf.float32)
+            
+            # Clipping para evitar log(0)
+            epsilon = tf.keras.backend.epsilon()
+            y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
+            
+            # Calcular cross-entropy
+            ce = -(y_true * tf.math.log(y_pred) + (1 - y_true) * tf.math.log(1 - y_pred))
+            
+            # Calcular p_t (probabilidade da classe verdadeira)
+            p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
+            
+            # Calcular alpha_t (peso da classe)
+            alpha_t = y_true * alpha + (1 - y_true) * (1 - alpha)
+            
+            # Focal Loss: alpha_t * (1 - p_t)^gamma * ce
+            focal_loss = alpha_t * tf.pow(1 - p_t, gamma) * ce
+            
+            return tf.reduce_mean(focal_loss)
+        
+        return focal_loss_fixed
+    
+    def create_resnet50_model_p10(self, input_shape=(224, 224, 3), dropout_rate=0.4, dense_units=256, 
+                                   freeze_backbone=True, unfreeze_layers=40, use_augmentation=True):
+        """
+        Cria modelo ResNet50 MELHORADO com head regularizado e data augmentation para MRI.
+        Otimizado para melhorar sensibilidade da classe Demented.
+        
+        Args:
+            input_shape: Formato da imagem de entrada
+            dropout_rate: Taxa de dropout (0.4)
+            dense_units: Unidades na camada densa (256)
+            freeze_backbone: Se True, congela todo o backbone inicialmente
+            unfreeze_layers: Número de camadas finais para descongelar no estágio B (30-50)
+            use_augmentation: Se True, adiciona camadas de data augmentation
+        """
+        # Input layer
+        inputs = Input(shape=input_shape)
+        x = inputs
+        
+        # Data augmentation realista para MRI AXIAL (rotação leve ±10°, zoom/shift pequenos, brilho/contraste leve)
+        if use_augmentation:
+            from tensorflow.keras.layers import Lambda
+            # Rotação leve ±10 graus (0.175 rad ≈ 10°)
+            x = RandomRotation(0.175, fill_mode='nearest')(x)
+            # Zoom pequeno (5-10%)
+            x = RandomZoom(0.1, fill_mode='nearest')(x)
+            # Shift pequeno (5-10%)
+            x = RandomTranslation(0.1, 0.1, fill_mode='nearest')(x)
+            # Ajuste leve de brilho/contraste
+            x = RandomContrast(0.1)(x)
+            # Ruído gaussiano leve (adicionar via Lambda layer)
+            def add_gaussian_noise(x):
+                noise = tf.random.normal(tf.shape(x), mean=0.0, stddev=0.01)
+                return x + noise
+            x = Lambda(add_gaussian_noise)(x)
+        
+        # Carregar ResNet50 pré-treinado
+        base_model = ResNet50(
+            weights='imagenet',
+            include_top=False,
+            input_tensor=x
+        )
+        
+        # Dar um nome ao base_model para facilitar identificação
+        base_model._name = 'resnet50_base'
+        
+        # Congelar backbone se solicitado
+        if freeze_backbone:
+            base_model.trainable = False
+        else:
+            # Descongelar apenas as últimas N camadas
+            total_layers = len(base_model.layers)
+            for i, layer in enumerate(base_model.layers):
+                if i < total_layers - unfreeze_layers:
+                    layer.trainable = False
+                else:
+                    layer.trainable = True
+        
+        # Head regularizado: GlobalAveragePooling2D -> Dense(256, relu, l2(1e-4)) -> Dropout(0.5) -> Dense(1, sigmoid)
+        x = base_model.output
+        x = GlobalAveragePooling2D()(x)
+        # Dense 256 com L2 e Dropout 0.5
+        x = Dense(256, activation='relu', kernel_regularizer=l2(1e-4))(x)
+        x = Dropout(0.5)(x)  # Dropout 0.5 conforme solicitado
+        # Saída binária com sigmoid
+        predictions = Dense(1, activation='sigmoid')(x)
+        
+        model = Model(inputs=inputs, outputs=predictions)
+        
+        return model
+    
+    def find_optimal_threshold(self, y_true, y_pred_proba, metric='balanced_accuracy'):
+        """
+        Encontra o threshold ótimo varrendo de 0 a 1 para maximizar balanced accuracy ou F1.
+        EVITA colapso para extremos (sens=0% ou esp=0%).
+        
+        Args:
+            y_true: Labels verdadeiros (0=NonDemented, 1=Demented)
+            y_pred_proba: Probabilidades preditas (probabilidade de classe 1=Demented)
+            metric: 'balanced_accuracy' (prioridade) ou 'f1' (secundário)
+        
+        Returns:
+            best_threshold: Threshold ótimo
+            best_score: Score no threshold ótimo
+            metrics_dict: Dicionário com todas as métricas no threshold ótimo
+        """
+        # Varrer thresholds de 0.0 a 1.0 com passo 0.01
+        thresholds = np.arange(0.0, 1.01, 0.01)
+        
+        best_threshold = 0.5
+        best_score = 0.0
+        best_metrics = {}
+        
+        for threshold in thresholds:
+            y_pred = (y_pred_proba >= threshold).astype(int)
+            
+            # Calcular todas as métricas
+            tn = np.sum((y_true == 0) & (y_pred == 0))
+            fp = np.sum((y_true == 0) & (y_pred == 1))
+            fn = np.sum((y_true == 1) & (y_pred == 0))
+            tp = np.sum((y_true == 1) & (y_pred == 1))
+            
+            sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+            balanced_acc = (sensitivity + specificity) / 2.0
+            f1 = f1_score(y_true, y_pred) if (tp + fp + fn) > 0 else 0.0
+            
+            # EVITAR colapso: rejeitar thresholds que resultam em sens=0% ou esp=0%
+            if sensitivity == 0.0 or specificity == 0.0:
+                continue
+            
+            # Escolher métrica
+            if metric == 'balanced_accuracy':
+                score = balanced_acc
+            elif metric == 'f1':
+                score = f1
+            else:
+                score = balanced_acc  # default
+            
+            if score > best_score:
+                best_score = score
+                best_threshold = threshold
+                best_metrics = {
+                    'sensitivity': sensitivity,
+                    'specificity': specificity,
+                    'balanced_accuracy': balanced_acc,
+                    'f1': f1,
+                    'tn': tn, 'fp': fp, 'fn': fn, 'tp': tp
+                }
+        
+        # Se não encontrou nenhum threshold válido (todos colapsaram), usar 0.5
+        if best_score == 0.0:
+            print("   Aviso: Todos os thresholds resultaram em colapso, usando 0.5")
+            best_threshold = 0.5
+            y_pred = (y_pred_proba >= 0.5).astype(int)
+            tn = np.sum((y_true == 0) & (y_pred == 0))
+            fp = np.sum((y_true == 0) & (y_pred == 1))
+            fn = np.sum((y_true == 1) & (y_pred == 0))
+            tp = np.sum((y_true == 1) & (y_pred == 1))
+            sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+            best_metrics = {
+                'sensitivity': sensitivity,
+                'specificity': specificity,
+                'balanced_accuracy': (sensitivity + specificity) / 2.0,
+                'f1': f1_score(y_true, y_pred),
+                'tn': tn, 'fp': fp, 'fn': fn, 'tp': tp
+            }
+        
+        return best_threshold, best_score, best_metrics
+    
+    def train_resnet50_classifier_internal(self, base_image_dir="images"):
+        """Treina e avalia o classificador ResNet50 (método interno)"""
+        print("\n" + "="*70)
+        print("CLASSIFICADOR PROFUNDO (RESNET50)")
+        print("="*70)
+        
+        # Ler CSVs
+        print("\n1. Carregando dados...")
+        train_df = pd.read_csv("train_split.csv", sep=";", decimal=".")
+        val_df = pd.read_csv("val_split.csv", sep=";", decimal=".")
+        test_df = pd.read_csv("test_split.csv", sep=";", decimal=".")
+        
+        print(f"   Treino: {len(train_df)} exames")
+        print(f"   Validação: {len(val_df)} exames")
+        print(f"   Teste: {len(test_df)} exames")
+        
+        # Verificar se base_image_dir existe
+        if not os.path.exists(base_image_dir):
+            print(f"\n   AVISO: Pasta '{base_image_dir}' não encontrada!")
+            print("   Tentando encontrar pasta de imagens...")
+            # Tentar outras pastas comuns
+            possible_dirs = ["output", "input_axl", "axl", "cor", "sag"]
+            for dir_name in possible_dirs:
+                if os.path.exists(dir_name):
+                    base_image_dir = dir_name
+                    print(f"   Usando: {base_image_dir}")
+                    break
+            else:
+                print("   ERRO: Não foi possível encontrar pasta de imagens!")
+                print("   Por favor, ajuste a variável 'base_image_dir' no código.")
+                return None
+        
+        # Preparar dados de treino
+        print("\n2. Preparando dados de treino...")
+        X_train = []
+        y_train = []
+        train_valid_indices = []
+        nii_count = 0
+        other_count = 0
+        
+        for idx, row in train_df.iterrows():
+            img_path = self.get_image_path_p10(row, train_df, base_image_dir)
+            if img_path and os.path.exists(img_path):
+                # Verificar se é arquivo NIfTI
+                is_nii = img_path.endswith(('.nii', '.nii.gz'))
+                if is_nii:
+                    nii_count += 1
+                else:
+                    other_count += 1
+                
+                # Usar 1 slice axial central para NIfTI (conforme solicitado)
+                num_slices = 1  # Slice axial central apenas
+                img = self.load_and_preprocess_image_p10(img_path, num_slices=num_slices)
+                if img is not None:
+                    X_train.append(img)
+                    # Verificar consistência de rótulos
+                    class_binary = str(row['ClassBinary']).strip()
+                    label = 1 if class_binary == 'Demented' else 0
+                    y_train.append(label)
+                    train_valid_indices.append(idx)
+            else:
+                print(f"   Aviso: Imagem não encontrada para {row.get('MRI ID', 'N/A')}")
+        
+        if nii_count > 0:
+            print(f"   Arquivos NIfTI (.nii) encontrados: {nii_count}")
+        if other_count > 0:
+            print(f"   Outros formatos encontrados: {other_count}")
+        
+        # Preparar dados de validação
+        print("\n3. Preparando dados de validação...")
+        X_val = []
+        y_val = []
+        
+        for idx, row in val_df.iterrows():
+            img_path = self.get_image_path_p10(row, val_df, base_image_dir)
+            if img_path and os.path.exists(img_path):
+                # Usar 1 slice axial central para NIfTI (conforme solicitado)
+                num_slices = 1  # Slice axial central apenas
+                img = self.load_and_preprocess_image_p10(img_path, num_slices=num_slices)
+                if img is not None:
+                    X_val.append(img)
+                    # Verificar consistência de rótulos
+                    class_binary = str(row['ClassBinary']).strip()
+                    label = 1 if class_binary == 'Demented' else 0
+                    y_val.append(label)
+        
+        # Preparar dados de teste
+        print("\n4. Preparando dados de teste...")
+        X_test = []
+        y_test = []
+        
+        for idx, row in test_df.iterrows():
+            img_path = self.get_image_path_p10(row, test_df, base_image_dir)
+            if img_path and os.path.exists(img_path):
+                # Usar 1 slice axial central para NIfTI (conforme solicitado)
+                num_slices = 1  # Slice axial central apenas
+                img = self.load_and_preprocess_image_p10(img_path, num_slices=num_slices)
+                if img is not None:
+                    X_test.append(img)
+                    # Verificar consistência de rótulos
+                    class_binary = str(row['ClassBinary']).strip()
+                    label = 1 if class_binary == 'Demented' else 0
+                    y_test.append(label)
+        
+        if len(X_train) == 0:
+            print("\n   ERRO: Nenhuma imagem válida encontrada para treino!")
+            print("   Verifique o caminho das imagens e ajuste 'base_image_dir'.")
+            return None
+        
+        print(f"\n   Imagens carregadas - Treino: {len(X_train)}, Val: {len(X_val)}, Teste: {len(X_test)}")
+        
+        # Converter para arrays numpy
+        X_train = np.array(X_train)
+        X_val = np.array(X_val)
+        X_test = np.array(X_test)
+        
+        # Converter labels para array numpy (binário, não categorical)
+        y_train = np.array(y_train)
+        y_val = np.array(y_val)
+        y_test = np.array(y_test)
+        
+        # Verificar distribuição de classes
+        train_demented = np.sum(y_train == 1)
+        train_nondemented = np.sum(y_train == 0)
+        print(f"\n5. Distribuição de classes no treino (ANTES de oversampling):")
+        print(f"   Demented: {train_demented} ({100*train_demented/len(y_train):.1f}%)")
+        print(f"   NonDemented: {train_nondemented} ({100*train_nondemented/len(y_train):.1f}%)")
+        
+        # IMPLEMENTAR OVERSAMPLING para balancear batches
+        print("\n6. Aplicando oversampling para balancear classes...")
+        from sklearn.utils import resample
+        
+        # Separar por classe
+        X_train_demented = X_train[y_train == 1]
+        y_train_demented = y_train[y_train == 1]
+        X_train_nondemented = X_train[y_train == 0]
+        y_train_nondemented = y_train[y_train == 0]
+        
+        # Oversample classe minoritária (Demented) para igualar NonDemented
+        if len(X_train_demented) < len(X_train_nondemented):
+            X_train_demented_oversampled, y_train_demented_oversampled = resample(
+                X_train_demented, y_train_demented,
+                replace=True,
+                n_samples=len(X_train_nondemented),
+                random_state=42
+            )
+            print(f"   Oversampling Demented: {len(X_train_demented)} -> {len(X_train_demented_oversampled)}")
+            # Combinar
+            X_train = np.concatenate([X_train_nondemented, X_train_demented_oversampled], axis=0)
+            y_train = np.concatenate([y_train_nondemented, y_train_demented_oversampled], axis=0)
+        else:
+            # Se Demented já é maioria, não fazer oversampling
+            print("   Demented já é maioria, não aplicando oversampling")
+            X_train = X_train
+            y_train = y_train
+        
+        # Embaralhar dados após oversampling
+        indices = np.arange(len(X_train))
+        np.random.seed(42)
+        np.random.shuffle(indices)
+        X_train = X_train[indices]
+        y_train = y_train[indices]
+        
+        train_demented_after = np.sum(y_train == 1)
+        train_nondemented_after = np.sum(y_train == 0)
+        print(f"   Distribuição APÓS oversampling:")
+        print(f"   Demented: {train_demented_after} ({100*train_demented_after/len(y_train):.1f}%)")
+        print(f"   NonDemented: {train_nondemented_after} ({100*train_nondemented_after/len(y_train):.1f}%)")
+        
+        # Class weight reduzido (já que usamos oversampling)
+        class_weight_dict = {0: 1.0, 1: 1.5}  # Reduzido de 2.5 para 1.5
+        print(f"\n7. Class weights (reduzido devido ao oversampling): {class_weight_dict}")
+        
+        # Criar modelo com head: GlobalAveragePooling2D -> Dense(256, relu, l2(1e-4)) -> Dropout(0.5) -> Dense(1, sigmoid)
+        print("\n8. Criando modelo ResNet50 (Estágio 1: backbone congelado)...")
+        print("   Head: GlobalAveragePooling2D -> Dense(256, relu, l2(1e-4)) -> Dropout(0.5) -> Dense(1, sigmoid)")
+        print("   Data augmentation: rotação ±10°, zoom/shift pequenos, brilho/contraste leve, ruído gaussiano")
+        model = self.create_resnet50_model_p10(
+            dropout_rate=0.5,  # Dropout 0.5 conforme solicitado
+            dense_units=256,
+            freeze_backbone=True,
+            unfreeze_layers=40,
+            use_augmentation=True
+        )
+        
+        # Testar duas losses: Focal Loss e BinaryCrossentropy com label smoothing
+        print("\n9. Configurando losses para comparar:")
+        focal_loss = self.focal_loss_binary(alpha=0.75, gamma=2.5)  # gamma entre 2-3
+        from tensorflow.keras.losses import BinaryCrossentropy
+        bce_label_smooth = BinaryCrossentropy(label_smoothing=0.05)
+        
+        # Usar Focal Loss inicialmente (pode comparar depois)
+        loss_to_use = focal_loss
+        loss_name = "Focal Loss (alpha=0.75, gamma=2.5)"
+        print(f"   Usando: {loss_name}")
+        print("   (Alternativa disponível: BinaryCrossentropy com label_smoothing=0.05)")
+        
+        # MELHORIA 3: Compilar com métricas: accuracy, AUC, Recall, Precision
+        # Criar métricas customizadas para Recall e Precision
+        def recall_metric(y_true, y_pred):
+            y_true = tf.cast(y_true, tf.float32)
+            y_pred = tf.cast(y_pred, tf.float32)
+            y_pred_binary = tf.cast(y_pred > 0.5, tf.float32)
+            tp = tf.reduce_sum(y_true * y_pred_binary)
+            fn = tf.reduce_sum(y_true * (1 - y_pred_binary))
+            return tp / (tp + fn + tf.keras.backend.epsilon())
+        
+        def precision_metric(y_true, y_pred):
+            y_true = tf.cast(y_true, tf.float32)
+            y_pred = tf.cast(y_pred, tf.float32)
+            y_pred_binary = tf.cast(y_pred > 0.5, tf.float32)
+            tp = tf.reduce_sum(y_true * y_pred_binary)
+            fp = tf.reduce_sum((1 - y_true) * y_pred_binary)
+            return tp / (tp + fp + tf.keras.backend.epsilon())
+        
+        # ESTÁGIO 1: Treinar apenas o head (backbone congelado)
+        print("\n10. ESTÁGIO 1: Treinando apenas o head (backbone congelado)...")
+        print(f"   Loss: {loss_name}")
+        print("   Learning rate: 1e-4, epochs: 5-8, batch_size: 8")
+        print("   Métricas: accuracy, AUC, Recall, Precision")
+        
+        # Criar métricas customizadas para Recall e Precision
+        def recall_metric(y_true, y_pred):
+            y_true = tf.cast(y_true, tf.float32)
+            y_pred = tf.cast(y_pred, tf.float32)
+            y_pred_binary = tf.cast(y_pred > 0.5, tf.float32)
+            tp = tf.reduce_sum(y_true * y_pred_binary)
+            fn = tf.reduce_sum(y_true * (1 - y_pred_binary))
+            return tp / (tp + fn + tf.keras.backend.epsilon())
+        
+        def precision_metric(y_true, y_pred):
+            y_true = tf.cast(y_true, tf.float32)
+            y_pred = tf.cast(y_pred, tf.float32)
+            y_pred_binary = tf.cast(y_pred > 0.5, tf.float32)
+            tp = tf.reduce_sum(y_true * y_pred_binary)
+            fp = tf.reduce_sum((1 - y_true) * y_pred_binary)
+            return tp / (tp + fp + tf.keras.backend.epsilon())
+        
+        model.compile(
+            optimizer=Adam(learning_rate=1e-4),
+            loss=loss_to_use,
+            metrics=['accuracy', 'AUC', recall_metric, precision_metric]
+        )
+        
+        # Early stopping monitorando val_auc
+        early_stopping_a = EarlyStopping(
+            monitor='val_auc',
+            patience=5,
+            restore_best_weights=True,
+            verbose=1,
+            mode='max'
+        )
+        
+        reduce_lr_a = ReduceLROnPlateau(
+            monitor='val_loss',
+            factor=0.5,
+            patience=3,
+            min_lr=1e-6,
+            verbose=1
+        )
+        
+        # Treinar Estágio 1
+        history_a = model.fit(
+            X_train, y_train,
+            validation_data=(X_val, y_val),
+            epochs=8,  # 5-8 épocas conforme solicitado
+            batch_size=8,
+            class_weight=class_weight_dict,  # Class weight reduzido (oversampling já balanceou)
+            callbacks=[early_stopping_a, reduce_lr_a],
+            verbose=1
+        )
+        
+        # MELHORIA 5: ESTÁGIO B - Descongelar últimas 30-50 camadas
+        print("\n9. ESTÁGIO B: Descongelando últimas 40 camadas para fine-tuning...")
+        print("   Learning rate: 1e-5, epochs: 15, batch_size: 8")
+        print("   L2 e dropout no head já aplicados")
+        
+        # Encontrar o ResNet50 base_model dentro do modelo
+        base_model = None
+        for layer in model.layers:
+            if isinstance(layer, Model):
+                if hasattr(layer, 'layers') and len(layer.layers) > 100:
+                    base_model = layer
+                    print(f"   ResNet50 encontrado: {layer.name} com {len(layer.layers)} camadas")
+                    break
+        
+        if base_model is None:
+            print("   Aviso: Não foi possível encontrar o ResNet50!")
+            print("   Pulando estágio B e usando modelo do estágio A...")
+            history_b = type('obj', (object,), {'history': {}})()
+            history_b.history = {
+                'accuracy': [],
+                'val_accuracy': [],
+                'val_auc': [],
+                'loss': [],
+                'val_loss': []
+            }
+        else:
+            # Descongelar apenas o último bloco (conv5) - aproximadamente últimas 16-20 camadas
+            # ResNet50 tem 5 blocos conv, o último (conv5) começa aproximadamente na camada 140+
+            total_layers = len(base_model.layers)
+            # Encontrar início do conv5 (geralmente ~140 camadas)
+            conv5_start = max(0, total_layers - 20)  # Últimas ~20 camadas (conv5)
+            print(f"   Total de camadas no ResNet50: {total_layers}")
+            print(f"   Descongelando últimas ~20 camadas (bloco conv5)...")
+            
+            for i, layer in enumerate(base_model.layers):
+                if i < conv5_start:
+                    layer.trainable = False
+                else:
+                    layer.trainable = True
+            
+            # Recompilar com learning rate menor
+            model.compile(
+                optimizer=Adam(learning_rate=1e-5),
+                loss=loss_to_use,
+                metrics=['accuracy', 'AUC', recall_metric, precision_metric]
+            )
+            
+            # Early stopping e ReduceLROnPlateau
+            early_stopping_b = EarlyStopping(
+                monitor='val_auc',
+                patience=5,
+                restore_best_weights=True,
+                verbose=1,
+                mode='max'
+            )
+            
+            reduce_lr_b = ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.5,
+                patience=3,
+                min_lr=1e-7,
+                verbose=1
+            )
+            
+            # Treinar Estágio 2
+            history_b = model.fit(
+                X_train, y_train,
+                validation_data=(X_val, y_val),
+                epochs=15,  # 10-15 épocas conforme solicitado
+                batch_size=8,
+                class_weight=class_weight_dict,
+                callbacks=[early_stopping_b, reduce_lr_b],
+                verbose=1
+            )
+        
+        # Combinar históricos (usar .get() para evitar KeyError)
+        # Verificar nomes das métricas no histórico (pode variar: 'auc', 'AUC', 'val_auc', 'val_AUC')
+        def get_metric(hist, key, default=[]):
+            """Busca métrica no histórico com diferentes variações de nome"""
+            if not isinstance(hist, dict):
+                return default
+            if key in hist:
+                return hist[key]
+            # Tentar variações do nome
+            variations = [key.lower(), key.upper(), key.capitalize(), 
+                          'val_' + key.lower(), 'val_' + key.upper(), 'val_' + key.capitalize()]
+            for var in variations:
+                if var in hist:
+                    return hist[var]
+            return default
+        
+        history_a_auc = get_metric(history_a.history, 'val_auc', [])
+        history_b_auc = get_metric(history_b.history, 'val_auc', []) if hasattr(history_b, 'history') and isinstance(history_b.history, dict) else []
+        
+        history = {
+            'accuracy': history_a.history.get('accuracy', []) + (history_b.history.get('accuracy', []) if hasattr(history_b, 'history') and isinstance(history_b.history, dict) else []),
+            'val_accuracy': history_a.history.get('val_accuracy', []) + (history_b.history.get('val_accuracy', []) if hasattr(history_b, 'history') and isinstance(history_b.history, dict) else []),
+            'val_auc': history_a_auc + history_b_auc,
+            'loss': history_a.history.get('loss', []) + (history_b.history.get('loss', []) if hasattr(history_b, 'history') and isinstance(history_b.history, dict) else []),
+            'val_loss': history_a.history.get('val_loss', []) + (history_b.history.get('val_loss', []) if hasattr(history_b, 'history') and isinstance(history_b.history, dict) else [])
+        }
+        
+        # Se val_auc estiver vazio, tentar calcular a partir das probabilidades de validação
+        if len(history['val_auc']) == 0:
+            print("   Aviso: AUC não encontrada no histórico, calculando a partir das predições...")
+            try:
+                y_val_pred_proba_temp = model.predict(X_val, verbose=0).flatten()
+                val_auc_calculated = roc_auc_score(y_val, y_val_pred_proba_temp)
+                # Criar lista com o valor calculado para cada época do estágio A
+                num_epochs_a = len(history_a.history.get('val_accuracy', []))
+                if num_epochs_a > 0:
+                    history['val_auc'] = [val_auc_calculated] * num_epochs_a
+                    print(f"   AUC calculada: {val_auc_calculated:.4f}")
+                else:
+                    history['val_auc'] = []
+            except Exception as e:
+                print(f"   Aviso: Não foi possível calcular AUC: {e}")
+                history['val_auc'] = []
+        
+        # Plotar curva de aprendizado melhorada
+        print("\n10. Gerando gráfico de aprendizado...")
+        
+        # Determinar número de subplots baseado nas métricas disponíveis
+        has_auc = len(history['val_auc']) > 0
+        num_subplots = 3 if has_auc else 2
+        
+        plt.figure(figsize=(15 if has_auc else 12, 5))
+        
+        # Subplot 1: Acurácia
+        plt.subplot(1, num_subplots, 1)
+        if len(history['accuracy']) > 0:
+            plt.plot(history['accuracy'], label='Treino', marker='o', markersize=3)
+        if len(history['val_accuracy']) > 0:
+            plt.plot(history['val_accuracy'], label='Validação', marker='s', markersize=3)
+        plt.xlabel('Época', fontsize=12)
+        plt.ylabel('Acurácia', fontsize=12)
+        plt.title('Acurácia - ResNet50 (Focal Loss)', fontsize=12, fontweight='bold')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Subplot 2: AUC (se disponível)
+        if has_auc:
+            plt.subplot(1, num_subplots, 2)
+            plt.plot(history['val_auc'], label='Validação AUC', marker='s', markersize=3, color='green')
+            plt.xlabel('Época', fontsize=12)
+            plt.ylabel('AUC', fontsize=12)
+            plt.title('AUC - ResNet50 (Focal Loss)', fontsize=12, fontweight='bold')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+        
+        # Subplot 3 (ou 2 se não tiver AUC): Loss
+        plt.subplot(1, num_subplots, num_subplots)
+        if len(history['loss']) > 0:
+            plt.plot(history['loss'], label='Treino', marker='o', markersize=3)
+        if len(history['val_loss']) > 0:
+            plt.plot(history['val_loss'], label='Validação', marker='s', markersize=3)
+        plt.xlabel('Época', fontsize=12)
+        plt.ylabel('Focal Loss', fontsize=12)
+        plt.title('Focal Loss - ResNet50', fontsize=12, fontweight='bold')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig('learning_curve_resnet50.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        print("   Salvo: learning_curve_resnet50.png")
+        
+        # Encontrar threshold ótimo usando precision_recall_curve
+        print("\n11. Encontrando threshold ótimo usando precision_recall_curve...")
+        print("   Maximizando F1 ou balanced accuracy (não só acurácia)...")
+        y_val_pred_proba = model.predict(X_val, verbose=0).flatten()
+        
+        # Calcular precision_recall_curve
+        from sklearn.metrics import precision_recall_curve
+        precision_vals, recall_vals, pr_thresholds = precision_recall_curve(y_val, y_val_pred_proba)
+        
+        # Encontrar threshold que maximiza F1 ou balanced accuracy
+        best_f1 = 0.0
+        best_bal_acc = 0.0
+        best_threshold_f1 = 0.5
+        best_threshold_bal = 0.5
+        
+        for i, threshold in enumerate(pr_thresholds):
+            y_pred = (y_val_pred_proba >= threshold).astype(int)
+            tn = np.sum((y_val == 0) & (y_pred == 0))
+            fp = np.sum((y_val == 0) & (y_pred == 1))
+            fn = np.sum((y_val == 1) & (y_pred == 0))
+            tp = np.sum((y_val == 1) & (y_pred == 1))
+            
+            sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+            balanced_acc = (sensitivity + specificity) / 2.0
+            f1 = f1_score(y_val, y_pred) if (tp + fp + fn) > 0 else 0.0
+            
+            # Evitar colapso
+            if sensitivity == 0.0 or specificity == 0.0:
+                continue
+            
+            if f1 > best_f1:
+                best_f1 = f1
+                best_threshold_f1 = threshold
+            
+            if balanced_acc > best_bal_acc:
+                best_bal_acc = balanced_acc
+                best_threshold_bal = threshold
+        
+        # Usar threshold que maximiza F1 (prioridade) ou balanced accuracy
+        if best_f1 > 0:
+            optimal_threshold = best_threshold_f1
+            metric_used = "F1"
+            best_score = best_f1
+        else:
+            optimal_threshold = best_threshold_bal
+            metric_used = "Balanced Accuracy"
+            best_score = best_bal_acc
+        
+        # Calcular métricas finais no threshold escolhido
+        y_val_pred_optimal = (y_val_pred_proba >= optimal_threshold).astype(int)
+        tn = np.sum((y_val == 0) & (y_val_pred_optimal == 0))
+        fp = np.sum((y_val == 0) & (y_val_pred_optimal == 1))
+        fn = np.sum((y_val == 1) & (y_val_pred_optimal == 0))
+        tp = np.sum((y_val == 1) & (y_val_pred_optimal == 1))
+        
+        sensitivity_val = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        specificity_val = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+        balanced_acc_val = (sensitivity_val + specificity_val) / 2.0
+        f1_val = f1_score(y_val, y_val_pred_optimal)
+        
+        print(f"   Threshold ótimo ({metric_used}): {optimal_threshold:.4f} (score={best_score:.4f})")
+        print(f"   Métricas na validação com threshold ótimo:")
+        print(f"     - Sensibilidade: {sensitivity_val:.4f}")
+        print(f"     - Especificidade: {specificity_val:.4f}")
+        print(f"     - Balanced Accuracy: {balanced_acc_val:.4f}")
+        print(f"     - F1-Score: {f1_val:.4f}")
+        
+        # Gerar curvas ROC e Precision-Recall na validação
+        print("\n12. Gerando curvas ROC e Precision-Recall na validação...")
+        
+        # ROC Curve
+        fpr, tpr, roc_thresholds = roc_curve(y_val, y_val_pred_proba)
+        roc_auc_val = auc(fpr, tpr)
+        
+        # Precision-Recall Curve (já calculado acima)
+        pr_auc_val = auc(recall_vals, precision_vals)
+        
+        # Plotar ambas as curvas
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # ROC Curve
+        ax1.plot(fpr, tpr, color='darkorange', lw=2, 
+                label=f'ROC curve (AUC = {roc_auc_val:.4f})')
+        ax1.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random')
+        ax1.set_xlim([0.0, 1.0])
+        ax1.set_ylim([0.0, 1.05])
+        ax1.set_xlabel('Taxa de Falsos Positivos (1 - Especificidade)', fontsize=12)
+        ax1.set_ylabel('Taxa de Verdadeiros Positivos (Sensibilidade)', fontsize=12)
+        ax1.set_title('Curva ROC - Validação', fontsize=14, fontweight='bold')
+        ax1.legend(loc="lower right")
+        ax1.grid(True, alpha=0.3)
+        
+        # Precision-Recall Curve
+        ax2.plot(recall_vals, precision_vals, color='blue', lw=2,
+                label=f'PR curve (AUC = {pr_auc_val:.4f})')
+        ax2.set_xlim([0.0, 1.0])
+        ax2.set_ylim([0.0, 1.05])
+        ax2.set_xlabel('Recall (Sensibilidade)', fontsize=12)
+        ax2.set_ylabel('Precision (Precisão)', fontsize=12)
+        ax2.set_title('Curva Precision-Recall - Validação', fontsize=14, fontweight='bold')
+        ax2.legend(loc="lower left")
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig('roc_pr_curves_resnet50.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"   Salvo: roc_pr_curves_resnet50.png")
+        print(f"   AUC-ROC na validação: {roc_auc_val:.4f}")
+        print(f"   AUC-PR na validação: {pr_auc_val:.4f}")
+        
+        # Avaliar no teste com threshold ótimo
+        if len(X_test) > 0:
+            print("\n13. Avaliando no conjunto de teste com threshold ótimo...")
+            print(f"   Threshold usado: {optimal_threshold:.4f} (encontrado na validação)")
+            y_test_pred_proba = model.predict(X_test, verbose=0).flatten()
+            # Usar threshold ótimo em vez de 0.5
+            y_test_pred = (y_test_pred_proba >= optimal_threshold).astype(int)
+            
+            accuracy = accuracy_score(y_test, y_test_pred)
+            sensitivity = recall_score(y_test, y_test_pred)  # Recall da classe positiva (Demented)
+            precision = precision_score(y_test, y_test_pred)
+            f1 = f1_score(y_test, y_test_pred)
+            cm = confusion_matrix(y_test, y_test_pred)
+            
+            tn, fp, fn, tp = cm.ravel()
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+            
+            # Calcular AUC
+            test_auc = roc_auc_score(y_test, y_test_pred_proba)
+            
+            # Plotar matriz de confusão
+            plt.figure(figsize=(8, 6))
+            if HAS_SEABORN:
+                sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                            xticklabels=['NonDemented', 'Demented'],
+                            yticklabels=['NonDemented', 'Demented'])
+            else:
+                # Usar matplotlib se seaborn não estiver disponível
+                plt.imshow(cm, interpolation='nearest', cmap='Blues')
+                plt.colorbar()
+                tick_marks = np.arange(2)
+                plt.xticks(tick_marks, ['NonDemented', 'Demented'])
+                plt.yticks(tick_marks, ['NonDemented', 'Demented'])
+                thresh = cm.max() / 2.
+                for i, j in np.ndindex(cm.shape):
+                    plt.text(j, i, format(cm[i, j], 'd'),
+                            horizontalalignment="center",
+                            color="white" if cm[i, j] > thresh else "black")
+            plt.ylabel('Verdadeiro', fontsize=12)
+            plt.xlabel('Predito', fontsize=12)
+            plt.title(f'Matriz de Confusão - ResNet50 (Teste)\nThreshold={optimal_threshold:.4f}', 
+                     fontsize=14, fontweight='bold')
+            plt.tight_layout()
+            plt.savefig('confusion_resnet50.png', dpi=150, bbox_inches='tight')
+            plt.close()
+            print("   Salvo: confusion_resnet50.png")
+            
+            # Exibir resultados (já foram exibidos acima)
+            # Calcular balanced accuracy
+            balanced_acc_test = (sensitivity + specificity) / 2.0
+            
+            print(f"Threshold usado: {optimal_threshold:.4f} (ótimo encontrado na validação)")
+            print(f"Acurácia: {accuracy:.4f} ({accuracy*100:.2f}%)")
+            print(f"Balanced Accuracy: {balanced_acc_test:.4f} ({balanced_acc_test*100:.2f}%)")
+            print(f"Sensibilidade (Recall Demented): {sensitivity:.4f} ({sensitivity*100:.2f}%)")
+            print(f"Especificidade: {specificity:.4f} ({specificity*100:.2f}%)")
+            print(f"Precisão (Precision): {precision:.4f} ({precision*100:.2f}%)")
+            print(f"F1-Score: {f1:.4f} ({f1*100:.2f}%)")
+            print(f"AUC: {test_auc:.4f}")
+            print(f"\nConfusion Matrix:")
+            print(f"[[{tn:4d} {fp:4d}]")
+            print(f" [{fn:4d} {tp:4d}]]")
+            print("="*70 + "\n")
+            
+            return model, accuracy, sensitivity, specificity
+        else:
+            print("\n   Aviso: Nenhuma imagem de teste válida encontrada!")
+            return model, None, None, None
+    
+    # ============================================================================
+    # PARTE 11: REGRESSORES PARA ESTIMAR IDADE
+    # ============================================================================
+    
+    def train_shallow_regressor_internal(self):
+        """Treina e avalia o regressor raso (tabular) para estimar idade"""
+        print("\n" + "="*70)
+        print("REGRESSOR RASO - ESTIMAÇÃO DE IDADE")
+        print("="*70)
+        
+        # Ler CSVs
+        print("\n1. Carregando dados...")
+        train_df = pd.read_csv("train_split.csv", sep=";", decimal=".")
+        val_df = pd.read_csv("val_split.csv", sep=";", decimal=".")
+        test_df = pd.read_csv("test_split.csv", sep=";", decimal=".")
+        
+        print(f"   Treino: {len(train_df)} exames")
+        print(f"   Validação: {len(val_df)} exames")
+        print(f"   Teste: {len(test_df)} exames")
+        
+        # Verificar se coluna Age existe
+        age_cols = ["Age", "age", "idade", "Idade"]
+        age_col = None
+        for col in age_cols:
+            if col in train_df.columns:
+                age_col = col
+                break
+        
+        if age_col is None:
+            print("   ERRO: Coluna de idade não encontrada!")
+            print("   Procurando por: Age, age, idade, Idade")
+            return None
+        
+        print(f"   Coluna de idade encontrada: {age_col}")
+        
+        # Features base (descritores ventriculares)
+        base_features = ["area", "perimeter", "eccentricity", "extent", "solidity", 
+                       "circularity", "aspect_ratio"]
+        
+        # Verificar quais features existem
+        available_features = [f for f in base_features if f in train_df.columns]
+        missing_features = [f for f in base_features if f not in train_df.columns]
+        
+        if missing_features:
+            print(f"   Aviso: Features não encontradas: {missing_features}")
+        print(f"   Features usadas: {available_features}")
+        
+        if not available_features:
+            print("   ERRO: Nenhuma feature disponível!")
+            return None
+        
+        # Preparar dados
+        X_train = train_df[available_features].copy()
+        X_val = val_df[available_features].copy()
+        X_test = test_df[available_features].copy()
+        
+        # Converter para numérico
+        for col in available_features:
+            X_train[col] = pd.to_numeric(X_train[col], errors='coerce')
+            X_val[col] = pd.to_numeric(X_val[col], errors='coerce')
+            X_test[col] = pd.to_numeric(X_test[col], errors='coerce')
+        
+        # Preencher NaN com média
+        X_train = X_train.fillna(X_train.mean())
+        X_val = X_val.fillna(X_train.mean())
+        X_test = X_test.fillna(X_train.mean())
+        
+        # Target: idade
+        y_train = pd.to_numeric(train_df[age_col], errors='coerce')
+        y_val = pd.to_numeric(val_df[age_col], errors='coerce')
+        y_test = pd.to_numeric(test_df[age_col], errors='coerce')
+        
+        # Remover NaN do target
+        train_mask = y_train.notna()
+        val_mask = y_val.notna()
+        test_mask = y_test.notna()
+        
+        X_train = X_train[train_mask]
+        y_train = y_train[train_mask]
+        X_val = X_val[val_mask]
+        y_val = y_val[val_mask]
+        X_test = X_test[test_mask]
+        y_test = y_test[test_mask]
+        
+        print(f"\n2. Dados após limpeza:")
+        print(f"   Treino: {len(X_train)} exames, idade média: {y_train.mean():.1f} anos")
+        print(f"   Validação: {len(X_val)} exames, idade média: {y_val.mean():.1f} anos")
+        print(f"   Teste: {len(X_test)} exames, idade média: {y_test.mean():.1f} anos")
+        
+        # Normalizar features
+        print("\n3. Normalizando features com StandardScaler...")
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_val_scaled = scaler.transform(X_val)
+        X_test_scaled = scaler.transform(X_test)
+        
+        # Converter de volta para DataFrame
+        X_train_scaled = pd.DataFrame(X_train_scaled, columns=available_features, index=X_train.index)
+        X_val_scaled = pd.DataFrame(X_val_scaled, columns=available_features, index=X_val.index)
+        X_test_scaled = pd.DataFrame(X_test_scaled, columns=available_features, index=X_test.index)
+        
+        # Escolher regressor (RandomForest como padrão, mas pode ser trocado)
+        print("\n4. Treinando regressor (RandomForestRegressor)...")
+        regressor = RandomForestRegressor(
+            n_estimators=100,
+            max_depth=10,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=42,
+            n_jobs=-1
+        )
+        
+        regressor.fit(X_train_scaled, y_train)
+        
+        # Avaliar em validação
+        y_val_pred = regressor.predict(X_val_scaled)
+        val_mae = mean_absolute_error(y_val, y_val_pred)
+        val_rmse = np.sqrt(mean_squared_error(y_val, y_val_pred))
+        val_r2 = r2_score(y_val, y_val_pred)
+        
+        print(f"\n5. Resultados na validação:")
+        print(f"   MAE: {val_mae:.2f} anos")
+        print(f"   RMSE: {val_rmse:.2f} anos")
+        print(f"   R²: {val_r2:.4f}")
+        
+        # Avaliar no teste
+        print("\n6. Avaliando no conjunto de teste...")
+        y_test_pred = regressor.predict(X_test_scaled)
+        
+        test_mae = mean_absolute_error(y_test, y_test_pred)
+        test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
+        test_r2 = r2_score(y_test, y_test_pred)
+        
+        # Plotar gráfico Predito vs Real
+        print("\n7. Gerando gráfico Predito vs Real...")
+        plt.figure(figsize=(10, 8))
+        
+        plt.scatter(y_test, y_test_pred, alpha=0.6, s=50)
+        
+        # Linha perfeita (y=x)
+        min_age = min(y_test.min(), y_test_pred.min())
+        max_age = max(y_test.max(), y_test_pred.max())
+        plt.plot([min_age, max_age], [min_age, max_age], 'r--', linewidth=2, label='Predição Perfeita')
+        
+        plt.xlabel('Idade Real (anos)', fontsize=12)
+        plt.ylabel('Idade Predita (anos)', fontsize=12)
+        plt.title(f'Regressor Raso - Predito vs Real (Teste)\nMAE={test_mae:.2f} anos, RMSE={test_rmse:.2f} anos, R²={test_r2:.4f}', 
+                 fontsize=14, fontweight='bold')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig('pred_vs_real_raso.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        print("   Salvo: pred_vs_real_raso.png")
+        
+        # Exibir resultados
+        print("\n" + "="*70)
+        print("=== REGRESSOR RASO - TESTE ===")
+        print("="*70)
+        print(f"MAE (Erro Médio Absoluto): {test_mae:.2f} anos")
+        print(f"RMSE (Raiz do Erro Quadrático Médio): {test_rmse:.2f} anos")
+        print(f"R² (Coeficiente de Determinação): {test_r2:.4f}")
+        print("="*70 + "\n")
+        
+        return regressor, test_mae, test_rmse, test_r2
+    
+    def create_resnet50_regressor_model(self, input_shape=(224, 224, 3), dropout_rate=0.5, dense_units=64):
+        """
+        Cria modelo ResNet50 para regressão (estimação de idade).
+        Similar ao classificador, mas com saída linear.
+        """
+        # Input layer
+        inputs = Input(shape=input_shape)
+        x = inputs
+        
+        # Data augmentation (apenas no treino)
+        x = RandomRotation(0.05, fill_mode='nearest')(x)
+        x = RandomZoom(0.1, fill_mode='nearest')(x)
+        
+        # Carregar ResNet50 pré-treinado
+        base_model = ResNet50(
+            weights='imagenet',
+            include_top=False,
+            input_tensor=x
+        )
+        
+        # Congelar backbone inicialmente
+        base_model.trainable = False
+        
+        # Head de regressão
+        x = base_model.output
+        x = GlobalAveragePooling2D()(x)
+        x = Dense(dense_units, activation='relu', kernel_regularizer=l2(1e-4))(x)
+        x = BatchNormalization()(x)
+        x = Dropout(dropout_rate)(x)
+        # Saída linear para regressão (idade)
+        predictions = Dense(1, activation='linear')(x)
+        
+        model = Model(inputs=inputs, outputs=predictions)
+        
+        return model
+    
+    def train_deep_regressor_internal(self, base_image_dir="images"):
+        """Treina e avalia o regressor profundo (imagens) para estimar idade"""
+        print("\n" + "="*70)
+        print("REGRESSOR PROFUNDO - ESTIMAÇÃO DE IDADE")
+        print("="*70)
+        
+        # Ler CSVs
+        print("\n1. Carregando dados...")
+        train_df = pd.read_csv("train_split.csv", sep=";", decimal=".")
+        val_df = pd.read_csv("val_split.csv", sep=";", decimal=".")
+        test_df = pd.read_csv("test_split.csv", sep=";", decimal=".")
+        
+        print(f"   Treino: {len(train_df)} exames")
+        print(f"   Validação: {len(val_df)} exames")
+        print(f"   Teste: {len(test_df)} exames")
+        
+        # Verificar se coluna Age existe
+        age_cols = ["Age", "age", "idade", "Idade"]
+        age_col = None
+        for col in age_cols:
+            if col in train_df.columns:
+                age_col = col
+                break
+        
+        if age_col is None:
+            print("   ERRO: Coluna de idade não encontrada!")
+            return None
+        
+        print(f"   Coluna de idade encontrada: {age_col}")
+        
+        # Verificar se base_image_dir existe
+        if not os.path.exists(base_image_dir):
+            print(f"\n   AVISO: Pasta '{base_image_dir}' não encontrada!")
+            possible_dirs = ["output", "input_axl", "axl", "cor", "sag"]
+            for dir_name in possible_dirs:
+                if os.path.exists(dir_name):
+                    base_image_dir = dir_name
+                    print(f"   Usando: {base_image_dir}")
+                    break
+            else:
+                print("   ERRO: Não foi possível encontrar pasta de imagens!")
+                return None
+        
+        # Preparar dados de treino
+        print("\n2. Preparando dados de treino...")
+        X_train = []
+        y_train = []
+        
+        for idx, row in train_df.iterrows():
+            img_path = self.get_image_path_p10(row, train_df, base_image_dir)
+            if img_path and os.path.exists(img_path):
+                img = self.load_and_preprocess_image_p10(img_path)
+                if img is not None:
+                    age = pd.to_numeric(row[age_col], errors='coerce')
+                    if pd.notna(age):
+                        X_train.append(img)
+                        y_train.append(float(age))
+        
+        # Preparar dados de validação
+        print("\n3. Preparando dados de validação...")
+        X_val = []
+        y_val = []
+        
+        for idx, row in val_df.iterrows():
+            img_path = self.get_image_path_p10(row, val_df, base_image_dir)
+            if img_path and os.path.exists(img_path):
+                img = self.load_and_preprocess_image_p10(img_path)
+                if img is not None:
+                    age = pd.to_numeric(row[age_col], errors='coerce')
+                    if pd.notna(age):
+                        X_val.append(img)
+                        y_val.append(float(age))
+        
+        # Preparar dados de teste
+        print("\n4. Preparando dados de teste...")
+        X_test = []
+        y_test = []
+        
+        for idx, row in test_df.iterrows():
+            img_path = self.get_image_path_p10(row, test_df, base_image_dir)
+            if img_path and os.path.exists(img_path):
+                img = self.load_and_preprocess_image_p10(img_path)
+                if img is not None:
+                    age = pd.to_numeric(row[age_col], errors='coerce')
+                    if pd.notna(age):
+                        X_test.append(img)
+                        y_test.append(float(age))
+        
+        if len(X_train) == 0:
+            print("\n   ERRO: Nenhuma imagem válida encontrada para treino!")
+            return None
+        
+        print(f"\n   Imagens carregadas - Treino: {len(X_train)}, Val: {len(X_val)}, Teste: {len(X_test)}")
+        
+        # Converter para arrays numpy
+        X_train = np.array(X_train)
+        X_val = np.array(X_val)
+        X_test = np.array(X_test)
+        y_train = np.array(y_train)
+        y_val = np.array(y_val)
+        y_test = np.array(y_test)
+        
+        print(f"   Idade média - Treino: {y_train.mean():.1f} anos, Val: {y_val.mean():.1f} anos, Teste: {y_test.mean():.1f} anos")
+        
+        # Criar modelo - ESTÁGIO A: congelar todo o backbone
+        print("\n5. Criando modelo ResNet50 para regressão (Estágio A: backbone congelado)...")
+        model = self.create_resnet50_regressor_model(
+            dropout_rate=0.5,
+            dense_units=64
+        )
+        
+        # ESTÁGIO A: Treinar apenas o head
+        print("\n6. ESTÁGIO A: Treinando apenas o head (backbone congelado)...")
+        print("   Learning rate: 1e-3, epochs: 8, batch_size: 8")
+        
+        model.compile(
+            optimizer=Adam(learning_rate=1e-3),
+            loss='mean_absolute_error',  # MAE loss
+            metrics=['mean_absolute_error']  # MAE como métrica
+        )
+        
+        # Callbacks para Estágio A
+        early_stopping_a = EarlyStopping(
+            monitor='val_mean_absolute_error',
+            patience=3,
+            restore_best_weights=True,
+            verbose=1,
+            mode='min'
+        )
+        
+        reduce_lr_a = ReduceLROnPlateau(
+            monitor='val_loss',
+            factor=0.5,
+            patience=2,
+            min_lr=1e-6,
+            verbose=1
+        )
+        
+        # Treinar Estágio A
+        history_a = model.fit(
+            X_train, y_train,
+            validation_data=(X_val, y_val),
+            epochs=8,
+            batch_size=8,
+            callbacks=[early_stopping_a, reduce_lr_a],
+            verbose=1
+        )
+        
+        # ESTÁGIO B: Descongelar últimas camadas e fine-tune
+        print("\n7. ESTÁGIO B: Descongelando últimas 10 camadas para fine-tuning...")
+        print("   Learning rate: 1e-5, epochs: 8, batch_size: 8")
+        
+        # Encontrar o ResNet50 base_model
+        base_model = None
+        for layer in model.layers:
+            if isinstance(layer, Model):
+                if hasattr(layer, 'layers') and len(layer.layers) > 100:
+                    base_model = layer
+                    print(f"   ResNet50 encontrado: {layer.name} com {len(layer.layers)} camadas")
+                    break
+        
+        if base_model is not None:
+            # Descongelar últimas 10 camadas
+            total_layers = len(base_model.layers)
+            for i, layer in enumerate(base_model.layers):
+                if i < total_layers - 10:
+                    layer.trainable = False
+                else:
+                    layer.trainable = True
+            
+            # Recompilar com learning rate menor
+            model.compile(
+                optimizer=Adam(learning_rate=1e-5),
+                loss='mean_absolute_error',
+                metrics=['mean_absolute_error']
+            )
+            
+            # Callbacks para Estágio B
+            early_stopping_b = EarlyStopping(
+                monitor='val_mean_absolute_error',
+                patience=3,
+                restore_best_weights=True,
+                verbose=1,
+                mode='min'
+            )
+            
+            reduce_lr_b = ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.5,
+                patience=2,
+                min_lr=1e-7,
+                verbose=1
+            )
+            
+            # Treinar Estágio B
+            history_b = model.fit(
+                X_train, y_train,
+                validation_data=(X_val, y_val),
+                epochs=8,
+                batch_size=8,
+                callbacks=[early_stopping_b, reduce_lr_b],
+                verbose=1
+            )
+            
+            # Combinar históricos
+            history = {
+                'loss': history_a.history['loss'] + history_b.history['loss'],
+                'val_loss': history_a.history['val_loss'] + history_b.history['val_loss'],
+                'mean_absolute_error': history_a.history['mean_absolute_error'] + history_b.history['mean_absolute_error'],
+                'val_mean_absolute_error': history_a.history['val_mean_absolute_error'] + history_b.history['val_mean_absolute_error']
+            }
+        else:
+            print("   Aviso: Não foi possível encontrar ResNet50, usando apenas Estágio A")
+            history = history_a.history
+        
+        # Plotar curva de aprendizado
+        print("\n8. Gerando gráfico de aprendizado...")
+        plt.figure(figsize=(12, 5))
+        
+        # Subplot 1: Loss
+        plt.subplot(1, 2, 1)
+        plt.plot(history['loss'], label='Treino', marker='o', markersize=3)
+        plt.plot(history['val_loss'], label='Validação', marker='s', markersize=3)
+        plt.xlabel('Época', fontsize=12)
+        plt.ylabel('Loss (MAE)', fontsize=12)
+        plt.title('Loss - Regressor Profundo (2 Estágios)', fontsize=12, fontweight='bold')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Subplot 2: MAE
+        plt.subplot(1, 2, 2)
+        plt.plot(history['mean_absolute_error'], label='Treino', marker='o', markersize=3)
+        plt.plot(history['val_mean_absolute_error'], label='Validação', marker='s', markersize=3)
+        plt.xlabel('Época', fontsize=12)
+        plt.ylabel('MAE (anos)', fontsize=12)
+        plt.title('MAE - Regressor Profundo (2 Estágios)', fontsize=12, fontweight='bold')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig('learning_curve_regressor_profundo.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        print("   Salvo: learning_curve_regressor_profundo.png")
+        
+        # Avaliar no teste
+        if len(X_test) > 0:
+            print("\n9. Avaliando no conjunto de teste...")
+            y_test_pred = model.predict(X_test, verbose=0).flatten()
+            
+            test_mae = mean_absolute_error(y_test, y_test_pred)
+            test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
+            test_r2 = r2_score(y_test, y_test_pred)
+            
+            # Plotar gráfico Predito vs Real
+            print("\n10. Gerando gráfico Predito vs Real...")
+            plt.figure(figsize=(10, 8))
+            
+            plt.scatter(y_test, y_test_pred, alpha=0.6, s=50)
+            
+            # Linha perfeita (y=x)
+            min_age = min(y_test.min(), y_test_pred.min())
+            max_age = max(y_test.max(), y_test_pred.max())
+            plt.plot([min_age, max_age], [min_age, max_age], 'r--', linewidth=2, label='Predição Perfeita')
+            
+            plt.xlabel('Idade Real (anos)', fontsize=12)
+            plt.ylabel('Idade Predita (anos)', fontsize=12)
+            plt.title(f'Regressor Profundo - Predito vs Real (Teste)\nMAE={test_mae:.2f} anos, RMSE={test_rmse:.2f} anos, R²={test_r2:.4f}', 
+                     fontsize=14, fontweight='bold')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig('pred_vs_real_profundo.png', dpi=150, bbox_inches='tight')
+            plt.close()
+            print("   Salvo: pred_vs_real_profundo.png")
+            
+            # Exibir resultados
+            print("\n" + "="*70)
+            print("=== REGRESSOR PROFUNDO - TESTE ===")
+            print("="*70)
+            print(f"MAE (Erro Médio Absoluto): {test_mae:.2f} anos")
+            print(f"RMSE (Raiz do Erro Quadrático Médio): {test_rmse:.2f} anos")
+            print(f"R² (Coeficiente de Determinação): {test_r2:.4f}")
+            print("="*70 + "\n")
+            
+            # Análise final
+            print("\n" + "="*70)
+            print("ANÁLISE: LIMITAÇÕES E SUFICIÊNCIA DAS ENTRADAS")
+            print("="*70)
+            print("""
+As entradas em cada caso apresentam limitações que afetam a qualidade da predição:
+
+REGRESSOR RASO (Tabular):
+- Descritores ventriculares (area, perimeter, etc.) capturam apenas características morfológicas 
+  específicas dos ventrículos, que podem não estar diretamente correlacionadas com a idade.
+- O dataset é pequeno (Treino: ~226, Teste: ~78 exames), o que limita a capacidade de 
+  generalização do modelo.
+- Descritores manuais podem não capturar toda a variação relacionada ao envelhecimento cerebral.
+
+REGRESSOR PROFUNDO (Imagens):
+- Uso de apenas um slice coronal central perde informação 3D importante do volume cerebral.
+- Transfer learning do ImageNet (imagens naturais) para MRI (imagens médicas) representa uma 
+  diferença de domínio significativa, limitando a eficácia do conhecimento pré-treinado.
+- O dataset pequeno dificulta o fine-tuning adequado de redes profundas.
+- Imagens NIfTI processadas como 2D podem não preservar características espaciais relevantes.
+
+CONCLUSÃO:
+As entradas são limitadas para obter predições muito precisas. O regressor profundo tem 
+potencial para capturar padrões mais complexos, mas é limitado pelo tamanho do dataset e 
+pela diferença de domínio. O regressor raso é mais interpretável, mas os descritores 
+ventriculares isolados podem não ser suficientes para estimar idade com alta precisão.
+            """)
+            print("="*70 + "\n")
+            
+            return model, test_mae, test_rmse, test_r2
+        else:
+            print("\n   Aviso: Nenhuma imagem de teste válida encontrada!")
+            return model, None, None, None
 
     def setup_bindings(self):
         """Configura os bindings do sistema."""
@@ -3663,8 +6752,8 @@ class AlzheimerApp:
             self.log(traceback.format_exc())
             return None
 
-    def show_scatterplot(self):
-        """ Gera gráficos de dispersão (scatterplots). [cite: 81] """
+    def show_scatterplot_legacy(self):
+        """ Gera gráficos de dispersão (scatterplots). [cite: 81] - Método legado """
         if self.features_df is None or self.dataframe is None:
             messagebox.showwarning("Aviso", "Carregue o CSV e extraia características primeiro.")
             self.log("Gere o DataFrame de features (self.features_df) primeiro.")
@@ -3943,4 +7032,5 @@ if __name__ == "__main__":
     # Inicia a aplicação Tkinter
     main_root = tk.Tk()
     app = AlzheimerApp(main_root)
+    main_root.mainloop()
     main_root.mainloop()
