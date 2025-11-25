@@ -4,7 +4,7 @@
 # GRUPO: [INSIRA OS NOMES/MATRÍCULAS AQUI]
 #
 # ESPECIFICAÇÕES:
-#   - Dataset: Coronal [cite: 51]
+#   - Dataset: Axial [cite: 51]
 #   - Regressor Raso: Regressão Linear [cite: 54]
 #   - Classificador Raso: XGBoost [cite: 55]
 #   - Modelos Profundos: ResNet50 [cite: 57]
@@ -38,6 +38,7 @@ from sklearn.metrics import (
     roc_curve, auc, precision_score, f1_score, roc_auc_score
 )
 from sklearn.linear_model import LinearRegression  # Regressor Raso
+from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.svm import SVR
 from sklearn.utils.class_weight import compute_class_weight
@@ -966,7 +967,7 @@ class AlzheimerApp:
                       "• Otimizador: Adam com learning rate 1e-4\n"
                       "• Early Stopping: para automaticamente se não houver melhoria\n"
                       "• Formatos suportados: .png, .jpg, .jpeg, .nii, .nii.gz (NIfTI)\n"
-                      "• Para imagens 3D (.nii): extrai slice coronal central automaticamente\n"
+                      "• Para imagens 3D (.nii): extrai slice axial central automaticamente\n"
                       "• Gera: curva de aprendizado e matriz de confusão",
                  wraplength=700,
                  justify=tk.LEFT).pack(pady=5)
@@ -1036,122 +1037,205 @@ class AlzheimerApp:
         self.text_results_resnet.insert(tk.END, "Os resultados do ResNet50 serão exibidos aqui...\n\n")
         self.text_results_resnet.insert(tk.END, "ℹ️ NOTA: O ResNet50 usa transfer learning do ImageNet com fine-tuning.\n")
         self.text_results_resnet.insert(tk.END, "   Formatos suportados: .png, .jpg, .jpeg, .nii, .nii.gz\n")
-        self.text_results_resnet.insert(tk.END, "   Para imagens NIfTI (.nii): extrai slice coronal central automaticamente.\n")
+        self.text_results_resnet.insert(tk.END, "   Para imagens NIfTI (.nii): extrai slice axial central automaticamente (não coronal).\n")
         self.text_results_resnet.insert(tk.END, "   Certifique-se de que a pasta de imagens está configurada corretamente.\n")
         self.text_results_resnet.config(state=tk.DISABLED)
     
     # --- PARTE 11: REGRESSÃO DE IDADE ---
     
     def create_parte11_tab(self):
-        """Cria a aba Parte 11 - Regressão de Idade"""
-        parte11_tab = ttk.Frame(self.notebook)
-        self.notebook.add(parte11_tab, text="Parte 11 - Regressão de Idade")
+        """Cria as abas Parte 11 - Regressão de Idade (Raso e Profundo separados)"""
+        # Criar notebook para as sub-abas
+        parte11_notebook = ttk.Notebook(self.notebook)
+        self.notebook.add(parte11_notebook, text="Parte 11 - Regressão de Idade")
+        
+        # Aba 1: Regressor Raso
+        self.create_regressor_raso_tab(parte11_notebook)
+        
+        # Aba 2: Regressor Profundo
+        self.create_regressor_profundo_tab(parte11_notebook)
+    
+    def create_regressor_raso_tab(self, parent_notebook):
+        """Cria a aba Regressor Raso"""
+        regressor_raso_tab = ttk.Frame(parent_notebook)
+        parent_notebook.add(regressor_raso_tab, text="Regressor Raso")
         
         # Frame principal
-        main_frame_p11 = ttk.Frame(parte11_tab)
-        main_frame_p11.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        main_frame_raso = ttk.Frame(regressor_raso_tab)
+        main_frame_raso.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        ttk.Label(main_frame_p11, text="Parte 11: Regressão para Estimar Idade do Paciente", 
+        ttk.Label(main_frame_raso, text="Regressor Raso - Estimar Idade", 
                  font=("Arial", 14, "bold"), foreground="darkblue").pack(pady=10)
         
-        ttk.Label(main_frame_p11, 
-                 text="Estime a idade do paciente usando regressores raso (tabular) e profundo (imagens).",
+        ttk.Label(main_frame_raso, 
+                 text="Estime a idade do paciente usando descritores ventriculares (area, perimeter, etc.)",
                  wraplength=700).pack(pady=5)
         
         # Informação
-        info_frame_p11 = ttk.LabelFrame(main_frame_p11, text="ℹ️ Informações", padding="10")
-        info_frame_p11.pack(fill=tk.X, pady=10, padx=10)
+        info_frame_raso = ttk.LabelFrame(main_frame_raso, text="ℹ️ Informações", padding="10")
+        info_frame_raso.pack(fill=tk.X, pady=10, padx=10)
         
-        ttk.Label(info_frame_p11, 
-                 text="• Regressor Raso: Usa descritores ventriculares (area, perimeter, etc.)\n"
-                      "• Regressor Profundo: Usa imagens NIfTI com ResNet50 (transfer learning)\n"
+        ttk.Label(info_frame_raso, 
+                 text="• Modelo: Linear Regression (sklearn) com StandardScaler\n"
+                      "• Entrada: Características calculadas no item 7 (descritores ventriculares)\n"
                       "• Métricas: MAE, RMSE, R²\n"
-                      "• Gráficos: Predito vs Real",
+                      "• Gráfico: Predito vs Real\n"
+                      "• Análise: Verifica suficiência das características e monotonicidade da idade\n"
+                      "• NOTA: O método profundo (ResNet50) não foi aplicado nesta etapa",
                  wraplength=700,
                  justify=tk.LEFT).pack(pady=5)
         
-        # Seção de configuração
-        ttk.Separator(main_frame_p11, orient='horizontal').pack(fill=tk.X, pady=20)
-        ttk.Label(main_frame_p11, text="Configurações:", 
-                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
-        
-        # Pasta de imagens
-        config_frame_p11 = ttk.Frame(main_frame_p11)
-        config_frame_p11.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(config_frame_p11, text="Pasta de imagens:").pack(side=tk.LEFT, padx=5)
-        self.entry_image_dir_p11 = ttk.Entry(config_frame_p11, width=40)
-        self.entry_image_dir_p11.insert(0, "images")
-        self.entry_image_dir_p11.pack(side=tk.LEFT, padx=5)
-        
-        btn_browse_images_p11 = ttk.Button(config_frame_p11, text="Procurar...", 
-                                      command=self.browse_image_dir_parte11)
-        btn_browse_images_p11.pack(side=tk.LEFT, padx=5)
-        
         # Botões de execução
-        ttk.Separator(main_frame_p11, orient='horizontal').pack(fill=tk.X, pady=20)
-        ttk.Label(main_frame_p11, text="Executar Regressores:", 
+        ttk.Separator(main_frame_raso, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_raso, text="Executar:", 
                  font=("Arial", 11, "bold")).pack(pady=(10, 5))
         
-        buttons_frame_p11 = ttk.Frame(main_frame_p11)
-        buttons_frame_p11.pack(pady=10)
+        buttons_frame_raso = ttk.Frame(main_frame_raso)
+        buttons_frame_raso.pack(pady=10)
         
         btn_train_shallow = ttk.Button(
-            buttons_frame_p11, 
+            buttons_frame_raso, 
             text="Treinar Regressor Raso", 
             command=self.train_shallow_regressor_p11,
             width=30
         )
         btn_train_shallow.pack(pady=5)
         
+        # Status
+        self.lbl_status_raso = ttk.Label(
+            main_frame_raso, 
+            text="Aguardando...",
+            foreground="gray"
+        )
+        self.lbl_status_raso.pack(pady=5)
+        
+        # Área de resultados
+        ttk.Separator(main_frame_raso, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_raso, text="Resultados:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        results_frame_raso = ttk.Frame(main_frame_raso)
+        results_frame_raso.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        scrollbar_results_raso = ttk.Scrollbar(results_frame_raso)
+        scrollbar_results_raso.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.text_results_raso = tk.Text(
+            results_frame_raso, 
+            yscrollcommand=scrollbar_results_raso.set,
+            wrap=tk.WORD,
+            height=20
+        )
+        self.text_results_raso.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_results_raso.config(command=self.text_results_raso.yview)
+        
+        self.text_results_raso.insert(tk.END, "Os resultados do regressor raso serão exibidos aqui...\n\n")
+        self.text_results_raso.insert(tk.END, "ℹ️ NOTA: Regressor Raso (Regressão Linear)\n")
+        self.text_results_raso.insert(tk.END, "   • Modelo: Linear Regression (sklearn) com Pipeline (StandardScaler)\n")
+        self.text_results_raso.insert(tk.END, "   • Entrada: Características calculadas no item 7 (descritores ventriculares)\n")
+        self.text_results_raso.insert(tk.END, "   • Target: coluna 'Age' do CSV\n")
+        self.text_results_raso.insert(tk.END, "   • Métricas: MAE, RMSE, R²\n")
+        self.text_results_raso.insert(tk.END, "   • Análise automática: Suficiência das características e monotonicidade da idade\n")
+        self.text_results_raso.insert(tk.END, "\n   NOTA: O método profundo (ResNet50) não foi aplicado nesta etapa.\n")
+        self.text_results_raso.config(state=tk.DISABLED)
+    
+    def create_regressor_profundo_tab(self, parent_notebook):
+        """Cria a aba Regressor Profundo"""
+        regressor_profundo_tab = ttk.Frame(parent_notebook)
+        parent_notebook.add(regressor_profundo_tab, text="Regressor Profundo")
+        
+        # Frame principal
+        main_frame_profundo = ttk.Frame(regressor_profundo_tab)
+        main_frame_profundo.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        ttk.Label(main_frame_profundo, text="Regressor Profundo - Estimar Idade", 
+                 font=("Arial", 14, "bold"), foreground="darkblue").pack(pady=10)
+        
+        ttk.Label(main_frame_profundo, 
+                 text="Estime a idade do paciente usando imagens NIfTI com ResNet50 (transfer learning)",
+                 wraplength=700).pack(pady=5)
+        
+        # Informação
+        info_frame_profundo = ttk.LabelFrame(main_frame_profundo, text="ℹ️ Informações", padding="10")
+        info_frame_profundo.pack(fill=tk.X, pady=10, padx=10)
+        
+        ttk.Label(info_frame_profundo, 
+                 text="• Usa imagens NIfTI (slice axial central)\n"
+                      "• Modelo: ResNet50 com transfer learning (ImageNet)\n"
+                      "• Treino em 2 estágios: backbone congelado → fine-tuning (últimas 20 camadas)\n"
+                      "• Métricas: MAE, RMSE, R²\n"
+                      "• Gráficos: Predito vs Real, Curva de Aprendizado",
+                 wraplength=700,
+                 justify=tk.LEFT).pack(pady=5)
+        
+        # Seção de configuração
+        ttk.Separator(main_frame_profundo, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_profundo, text="Configurações:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        # Pasta de imagens
+        config_frame_profundo = ttk.Frame(main_frame_profundo)
+        config_frame_profundo.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(config_frame_profundo, text="Pasta de imagens:").pack(side=tk.LEFT, padx=5)
+        self.entry_image_dir_p11 = ttk.Entry(config_frame_profundo, width=40)
+        self.entry_image_dir_p11.insert(0, "images")
+        self.entry_image_dir_p11.pack(side=tk.LEFT, padx=5)
+        
+        btn_browse_images_p11 = ttk.Button(config_frame_profundo, text="Procurar...", 
+                                      command=self.browse_image_dir_parte11)
+        btn_browse_images_p11.pack(side=tk.LEFT, padx=5)
+        
+        # Botões de execução
+        ttk.Separator(main_frame_profundo, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_profundo, text="Executar:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        buttons_frame_profundo = ttk.Frame(main_frame_profundo)
+        buttons_frame_profundo.pack(pady=10)
+        
         btn_train_deep = ttk.Button(
-            buttons_frame_p11, 
+            buttons_frame_profundo, 
             text="Treinar Regressor Profundo", 
             command=self.train_deep_regressor_p11,
             width=30
         )
         btn_train_deep.pack(pady=5)
         
-        btn_train_both_p11 = ttk.Button(
-            buttons_frame_p11, 
-            text="Treinar Ambos", 
-            command=self.train_both_regressors_p11,
-            width=30
-        )
-        btn_train_both_p11.pack(pady=5)
-        
         # Status
-        self.lbl_status_p11 = ttk.Label(
-            main_frame_p11, 
+        self.lbl_status_profundo = ttk.Label(
+            main_frame_profundo, 
             text="Aguardando...",
             foreground="gray"
         )
-        self.lbl_status_p11.pack(pady=5)
+        self.lbl_status_profundo.pack(pady=5)
         
         # Área de resultados
-        ttk.Separator(main_frame_p11, orient='horizontal').pack(fill=tk.X, pady=20)
-        ttk.Label(main_frame_p11, text="Resultados:", 
+        ttk.Separator(main_frame_profundo, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_profundo, text="Resultados:", 
                  font=("Arial", 11, "bold")).pack(pady=(10, 5))
         
-        results_frame_p11 = ttk.Frame(main_frame_p11)
-        results_frame_p11.pack(fill=tk.BOTH, expand=True, pady=5)
+        results_frame_profundo = ttk.Frame(main_frame_profundo)
+        results_frame_profundo.pack(fill=tk.BOTH, expand=True, pady=5)
         
-        scrollbar_results_p11 = ttk.Scrollbar(results_frame_p11)
-        scrollbar_results_p11.pack(side=tk.RIGHT, fill=tk.Y)
+        scrollbar_results_profundo = ttk.Scrollbar(results_frame_profundo)
+        scrollbar_results_profundo.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.text_results_p11 = tk.Text(
-            results_frame_p11, 
-            yscrollcommand=scrollbar_results_p11.set,
+        self.text_results_profundo = tk.Text(
+            results_frame_profundo, 
+            yscrollcommand=scrollbar_results_profundo.set,
             wrap=tk.WORD,
             height=20
         )
-        self.text_results_p11.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar_results_p11.config(command=self.text_results_p11.yview)
+        self.text_results_profundo.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_results_profundo.config(command=self.text_results_profundo.yview)
         
-        self.text_results_p11.insert(tk.END, "Os resultados dos regressores serão exibidos aqui...\n\n")
-        self.text_results_p11.insert(tk.END, "ℹ️ NOTA: Use os mesmos splits (train/val/test) da Parte 9.\n")
-        self.text_results_p11.insert(tk.END, "   Target: coluna 'Age' do CSV.\n")
-        self.text_results_p11.config(state=tk.DISABLED)
+        self.text_results_profundo.insert(tk.END, "Os resultados do regressor profundo serão exibidos aqui...\n\n")
+        self.text_results_profundo.insert(tk.END, "ℹ️ NOTA: O ResNet50 usa transfer learning do ImageNet com fine-tuning.\n")
+        self.text_results_profundo.insert(tk.END, "   Formatos suportados: .png, .jpg, .jpeg, .nii, .nii.gz\n")
+        self.text_results_profundo.insert(tk.END, "   Para imagens NIfTI (.nii): extrai slice axial central automaticamente.\n")
+        self.text_results_profundo.insert(tk.END, "   Certifique-se de que a pasta de imagens está configurada corretamente.\n")
+        self.text_results_profundo.config(state=tk.DISABLED)
     
     def browse_image_dir_parte11(self):
         """Seleciona pasta de imagens para Parte 11"""
@@ -1175,7 +1259,7 @@ class AlzheimerApp:
             messagebox.showerror("Erro", f"Arquivos não encontrados: {missing}\n\nExecute a Parte 9 primeiro!")
             return
         
-        self.lbl_status_p11.config(
+        self.lbl_status_raso.config(
             text="Treinando Regressor Raso...", 
             foreground="blue"
         )
@@ -1192,22 +1276,22 @@ class AlzheimerApp:
             sys.stdout = old_stdout
             
             # Exibir resultados
-            self.text_results_p11.config(state=tk.NORMAL)
-            self.text_results_p11.insert(tk.END, output)
-            self.text_results_p11.see(tk.END)
-            self.text_results_p11.config(state=tk.DISABLED)
+            self.text_results_raso.config(state=tk.NORMAL)
+            self.text_results_raso.insert(tk.END, output)
+            self.text_results_raso.see(tk.END)
+            self.text_results_raso.config(state=tk.DISABLED)
             
-            self.lbl_status_p11.config(text="✓ Regressor Raso treinado com sucesso!", foreground="green")
+            self.lbl_status_raso.config(text="✓ Regressor Raso treinado com sucesso!", foreground="green")
             messagebox.showinfo("Sucesso", "Regressor Raso treinado!\n\nVerifique os arquivos gerados:\n- pred_vs_real_raso.png")
             
         except Exception as e:
             sys.stdout = old_stdout
             error_msg = f"Erro ao treinar Regressor Raso:\n{str(e)}"
-            self.text_results_p11.config(state=tk.NORMAL)
-            self.text_results_p11.insert(tk.END, f"\n{error_msg}\n")
-            self.text_results_p11.see(tk.END)
-            self.text_results_p11.config(state=tk.DISABLED)
-            self.lbl_status_p11.config(text=f"Erro: {str(e)}", foreground="red")
+            self.text_results_raso.config(state=tk.NORMAL)
+            self.text_results_raso.insert(tk.END, f"\n{error_msg}\n")
+            self.text_results_raso.see(tk.END)
+            self.text_results_raso.config(state=tk.DISABLED)
+            self.lbl_status_raso.config(text=f"Erro: {str(e)}", foreground="red")
             messagebox.showerror("Erro", error_msg)
             import traceback
             traceback.print_exc()
@@ -1227,7 +1311,7 @@ class AlzheimerApp:
         # Obter pasta de imagens
         image_dir = self.entry_image_dir_p11.get() if hasattr(self, 'entry_image_dir_p11') else "images"
         
-        self.lbl_status_p11.config(
+        self.lbl_status_profundo.config(
             text="Treinando Regressor Profundo... (isso pode levar vários minutos)", 
             foreground="blue"
         )
@@ -1244,22 +1328,22 @@ class AlzheimerApp:
             sys.stdout = old_stdout
             
             # Exibir resultados
-            self.text_results_p11.config(state=tk.NORMAL)
-            self.text_results_p11.insert(tk.END, output)
-            self.text_results_p11.see(tk.END)
-            self.text_results_p11.config(state=tk.DISABLED)
+            self.text_results_profundo.config(state=tk.NORMAL)
+            self.text_results_profundo.insert(tk.END, output)
+            self.text_results_profundo.see(tk.END)
+            self.text_results_profundo.config(state=tk.DISABLED)
             
-            self.lbl_status_p11.config(text="✓ Regressor Profundo treinado com sucesso!", foreground="green")
+            self.lbl_status_profundo.config(text="✓ Regressor Profundo treinado com sucesso!", foreground="green")
             messagebox.showinfo("Sucesso", "Regressor Profundo treinado!\n\nVerifique os arquivos gerados:\n- learning_curve_regressor_profundo.png\n- pred_vs_real_profundo.png")
             
         except Exception as e:
             sys.stdout = old_stdout
             error_msg = f"Erro ao treinar Regressor Profundo:\n{str(e)}"
-            self.text_results_p11.config(state=tk.NORMAL)
-            self.text_results_p11.insert(tk.END, f"\n{error_msg}\n")
-            self.text_results_p11.see(tk.END)
-            self.text_results_p11.config(state=tk.DISABLED)
-            self.lbl_status_p11.config(text=f"Erro: {str(e)}", foreground="red")
+            self.text_results_profundo.config(state=tk.NORMAL)
+            self.text_results_profundo.insert(tk.END, f"\n{error_msg}\n")
+            self.text_results_profundo.see(tk.END)
+            self.text_results_profundo.config(state=tk.DISABLED)
+            self.lbl_status_profundo.config(text=f"Erro: {str(e)}", foreground="red")
             messagebox.showerror("Erro", error_msg)
             import traceback
             traceback.print_exc()
@@ -1527,15 +1611,19 @@ class AlzheimerApp:
             for col in available_cols:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
             
-            # Mapear cores
+            # Normalizar coluna Group: padronizar todas as variações de "Nondemented" para "NonDemented"
+            df['Group'] = df['Group'].str.strip()
+            df['Group'] = df['Group'].str.replace('Nondemented', 'NonDemented', case=False, regex=False)
+            df['Group'] = df['Group'].str.replace('non-demented', 'NonDemented', case=False, regex=False)
+            df['Group'] = df['Group'].str.replace('non demented', 'NonDemented', case=False, regex=False)
+            df['Group_normalized'] = df['Group']
+            
+            # Mapear cores (apenas uma entrada para NonDemented)
             color_map = {
                 'Converted': 'black',
                 'NonDemented': 'blue',
-                'Nondemented': 'blue',
                 'Demented': 'red'
             }
-            
-            df['Group_normalized'] = df['Group'].str.strip()
             
             # Gerar pares
             import itertools
@@ -1553,9 +1641,9 @@ class AlzheimerApp:
                 fig = Figure(figsize=(8, 6))
                 ax = fig.add_subplot(111)
                 
-                # Plotar por grupo
+                # Plotar por grupo (usar comparação exata para evitar duplicação)
                 for group_name, color in color_map.items():
-                    group_data = df_valid[df_valid['Group_normalized'].str.contains(group_name, case=False, na=False)]
+                    group_data = df_valid[df_valid['Group_normalized'] == group_name]
                     if len(group_data) > 0:
                         ax.scatter(
                             group_data[feat_i], 
@@ -1761,6 +1849,10 @@ class AlzheimerApp:
                     return None
             
             df_work['ClassBinary'] = df_work['Group'].apply(classify_binary)
+            
+            # Normalizar ClassBinary: padronizar todas as variações de "Nondemented" para "NonDemented"
+            df_work = self.normalize_classbinary_column(df_work)
+            
             df_bin = df_work[df_work['ClassBinary'].isin(['Demented', 'NonDemented'])].copy()
             
             # Definir classe por paciente
@@ -1797,6 +1889,11 @@ class AlzheimerApp:
             df_test = df_bin[df_bin['Subject ID'].isin(test_patients)].copy()
             
             # Salvar CSVs
+            # Normalizar ClassBinary antes de salvar (garantir consistência)
+            df_train = self.normalize_classbinary_column(df_train)
+            df_val = self.normalize_classbinary_column(df_val)
+            df_test = self.normalize_classbinary_column(df_test)
+            
             df_train.to_csv('train_split.csv', sep=';', decimal='.', index=False)
             df_val.to_csv('val_split.csv', sep=';', decimal='.', index=False)
             df_test.to_csv('test_split.csv', sep=';', decimal='.', index=False)
@@ -2141,29 +2238,32 @@ class AlzheimerApp:
                         # Apenas slice axial central (compatibilidade)
                         slice_idx = img_data.shape[2] // 2
                         img_data = img_data[:, :, slice_idx]
-                        # Normalizar cada slice separadamente antes de empilhar
-                        normalized_slices = []
-                        for slice_data in slices:
-                            p1 = np.percentile(slice_data, 1)
-                            p99 = np.percentile(slice_data, 99)
-                            if p99 > p1:
-                                slice_norm = np.clip(slice_data, p1, p99)
-                                slice_norm = (slice_norm - p1) / (p99 - p1 + 1e-8)
-                            else:
-                                slice_min = np.min(slice_data)
-                                slice_max = np.max(slice_data)
-                                if slice_max > slice_min:
-                                    slice_norm = (slice_data - slice_min) / (slice_max - slice_min + 1e-8)
-                                else:
-                                    slice_norm = np.zeros_like(slice_data)
-                            normalized_slices.append(slice_norm)
-                        # Empilhar como canais RGB (3 ou 5 slices = 3 ou 5 canais)
-                        # Se 5 slices, usar apenas os 3 primeiros canais (ou média)
-                        if len(normalized_slices) == 5:
-                            # Opção 1: Usar apenas 3 slices (primeiro, central, último)
-                            img_data = np.stack([normalized_slices[0], normalized_slices[2], normalized_slices[4]], axis=-1)
+                        slices = [img_data]  # Criar lista com um único slice
+                    
+                    # Normalizar cada slice separadamente antes de empilhar
+                    normalized_slices = []
+                    for slice_data in slices:
+                        p1 = np.percentile(slice_data, 1)
+                        p99 = np.percentile(slice_data, 99)
+                        if p99 > p1:
+                            slice_norm = np.clip(slice_data, p1, p99)
+                            slice_norm = (slice_norm - p1) / (p99 - p1 + 1e-8)
                         else:
-                            img_data = np.stack(normalized_slices, axis=-1)
+                            slice_min = np.min(slice_data)
+                            slice_max = np.max(slice_data)
+                            if slice_max > slice_min:
+                                slice_norm = (slice_data - slice_min) / (slice_max - slice_min + 1e-8)
+                            else:
+                                slice_norm = np.zeros_like(slice_data)
+                        normalized_slices.append(slice_norm)
+                    
+                    # Empilhar como canais RGB (3 ou 5 slices = 3 ou 5 canais)
+                    # Se 5 slices, usar apenas os 3 primeiros canais (ou média)
+                    if len(normalized_slices) == 5:
+                        # Opção 1: Usar apenas 3 slices (primeiro, central, último)
+                        img_data = np.stack([normalized_slices[0], normalized_slices[2], normalized_slices[4]], axis=-1)
+                    else:
+                        img_data = np.stack(normalized_slices, axis=-1)
                 elif len(img_data.shape) == 2:
                     # 2D: já está no formato correto, replicar para 3 canais depois
                     pass
@@ -2767,6 +2867,11 @@ class AlzheimerApp:
         train_df = pd.read_csv("train_split.csv", sep=";", decimal=".")
         val_df = pd.read_csv("val_split.csv", sep=";", decimal=".")
         test_df = pd.read_csv("test_split.csv", sep=";", decimal=".")
+        
+        # Normalizar ClassBinary: padronizar todas as variações de "Nondemented" para "NonDemented"
+        train_df = self.normalize_classbinary_column(train_df)
+        val_df = self.normalize_classbinary_column(val_df)
+        test_df = self.normalize_classbinary_column(test_df)
         
         print(f"   Treino: {len(train_df)} exames")
         print(f"   Validação: {len(val_df)} exames")
@@ -3379,6 +3484,27 @@ class AlzheimerApp:
     # PARTE 11: REGRESSORES PARA ESTIMAR IDADE
     # ============================================================================
     
+    def normalize_classbinary_column(self, df):
+        """
+        Normaliza a coluna ClassBinary padronizando todas as variações de "Nondemented" para "NonDemented".
+        
+        Args:
+            df: DataFrame com coluna ClassBinary
+            
+        Returns:
+            DataFrame com ClassBinary normalizado
+        """
+        if 'ClassBinary' in df.columns:
+            df = df.copy()
+            # Padronizar todas as variações para "NonDemented" (com D maiúsculo)
+            df['ClassBinary'] = df['ClassBinary'].astype(str).str.strip()
+            df['ClassBinary'] = df['ClassBinary'].str.replace('Nondemented', 'NonDemented', case=False, regex=False)
+            df['ClassBinary'] = df['ClassBinary'].str.replace('non-demented', 'NonDemented', case=False, regex=False)
+            df['ClassBinary'] = df['ClassBinary'].str.replace('non demented', 'NonDemented', case=False, regex=False)
+            df['ClassBinary'] = df['ClassBinary'].str.replace('Non-demented', 'NonDemented', case=False, regex=False)
+            df['ClassBinary'] = df['ClassBinary'].str.replace('Non Demented', 'NonDemented', case=False, regex=False)
+        return df
+    
     def train_shallow_regressor_internal(self):
         """Treina e avalia o regressor raso (tabular) para estimar idade"""
         print("\n" + "="*70)
@@ -3390,6 +3516,11 @@ class AlzheimerApp:
         train_df = pd.read_csv("train_split.csv", sep=";", decimal=".")
         val_df = pd.read_csv("val_split.csv", sep=";", decimal=".")
         test_df = pd.read_csv("test_split.csv", sep=";", decimal=".")
+        
+        # Normalizar ClassBinary: padronizar todas as variações de "Nondemented" para "NonDemented"
+        train_df = self.normalize_classbinary_column(train_df)
+        val_df = self.normalize_classbinary_column(val_df)
+        test_df = self.normalize_classbinary_column(test_df)
         
         print(f"   Treino: {len(train_df)} exames")
         print(f"   Validação: {len(val_df)} exames")
@@ -3464,45 +3595,31 @@ class AlzheimerApp:
         print(f"   Validação: {len(X_val)} exames, idade média: {y_val.mean():.1f} anos")
         print(f"   Teste: {len(X_test)} exames, idade média: {y_test.mean():.1f} anos")
         
-        # Normalizar features
-        print("\n3. Normalizando features com StandardScaler...")
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_val_scaled = scaler.transform(X_val)
-        X_test_scaled = scaler.transform(X_test)
+        # Usar Pipeline com StandardScaler + LinearRegression
+        print("\n3. Criando pipeline com StandardScaler + LinearRegression...")
+        raso_regressor = Pipeline([
+            ("scaler", StandardScaler()),
+            ("lr", LinearRegression())
+        ])
         
-        # Converter de volta para DataFrame
-        X_train_scaled = pd.DataFrame(X_train_scaled, columns=available_features, index=X_train.index)
-        X_val_scaled = pd.DataFrame(X_val_scaled, columns=available_features, index=X_val.index)
-        X_test_scaled = pd.DataFrame(X_test_scaled, columns=available_features, index=X_test.index)
-        
-        # Escolher regressor (RandomForest como padrão, mas pode ser trocado)
-        print("\n4. Treinando regressor (RandomForestRegressor)...")
-        regressor = RandomForestRegressor(
-            n_estimators=100,
-            max_depth=10,
-            min_samples_split=5,
-            min_samples_leaf=2,
-            random_state=42,
-            n_jobs=-1
-        )
-        
-        regressor.fit(X_train_scaled, y_train)
+        # Treinar no conjunto de treino
+        print("\n4. Treinando regressor raso (Linear Regression)...")
+        raso_regressor.fit(X_train, y_train)
         
         # Avaliar em validação
-        y_val_pred = regressor.predict(X_val_scaled)
+        print("\n5. Avaliando no conjunto de validação...")
+        y_val_pred = raso_regressor.predict(X_val)
         val_mae = mean_absolute_error(y_val, y_val_pred)
         val_rmse = np.sqrt(mean_squared_error(y_val, y_val_pred))
         val_r2 = r2_score(y_val, y_val_pred)
         
-        print(f"\n5. Resultados na validação:")
         print(f"   MAE: {val_mae:.2f} anos")
         print(f"   RMSE: {val_rmse:.2f} anos")
         print(f"   R²: {val_r2:.4f}")
         
         # Avaliar no teste
         print("\n6. Avaliando no conjunto de teste...")
-        y_test_pred = regressor.predict(X_test_scaled)
+        y_test_pred = raso_regressor.predict(X_test)
         
         test_mae = mean_absolute_error(y_test, y_test_pred)
         test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
@@ -3539,22 +3656,87 @@ class AlzheimerApp:
         print(f"R² (Coeficiente de Determinação): {test_r2:.4f}")
         print("="*70 + "\n")
         
-        return regressor, test_mae, test_rmse, test_r2
+        return raso_regressor, test_mae, test_rmse, test_r2
     
-    def create_resnet50_regressor_model(self, input_shape=(224, 224, 3), dropout_rate=0.5, dense_units=64):
+    def load_nifti_axial_slice_for_regression(self, image_path, target_size=(224, 224)):
+        """
+        Carrega arquivo NIfTI e extrai slice AXIAL central.
+        Para volume vol[x,y,z], pega z_mid e usa vol[:,:,z_mid].
+        """
+        try:
+            if image_path.endswith(('.nii', '.nii.gz')):
+                nii_img = nib.load(image_path)
+                img_data = nii_img.get_fdata().astype(np.float32)
+                
+                # Processar diferentes dimensões
+                if len(img_data.shape) == 4:
+                    img_data = img_data[:, :, :, 0]  # 4D: pegar primeiro volume
+                
+                if len(img_data.shape) == 3:
+                    # 3D: (x, y, z) - extrair slice AXIAL central (eixo z)
+                    z_mid = img_data.shape[2] // 2
+                    img_data = img_data[:, :, z_mid]  # Slice axial central
+                
+                # Normalização de intensidade: clipping p1-p99 e min-max para [0,1]
+                p1 = np.percentile(img_data, 1)
+                p99 = np.percentile(img_data, 99)
+                if p99 > p1:
+                    img_data = np.clip(img_data, p1, p99)
+                    img_data = (img_data - p1) / (p99 - p1 + 1e-8)
+                else:
+                    img_min = np.min(img_data)
+                    img_max = np.max(img_data)
+                    if img_max > img_min:
+                        img_data = (img_data - img_min) / (img_max - img_min + 1e-8)
+                    else:
+                        img_data = np.zeros_like(img_data)
+                
+                # Replicar para 3 canais
+                if len(img_data.shape) == 2:
+                    img_data = np.stack([img_data, img_data, img_data], axis=-1)
+                
+                # Resize para 224x224 usando PIL
+                img_pil = Image.fromarray((img_data * 255).astype(np.uint8))
+                img_pil = img_pil.resize(target_size, Image.LANCZOS)
+                img_array = np.array(img_pil).astype(np.float32) / 255.0
+                
+                # Aplicar preprocess_input do ResNet50
+                from tensorflow.keras.applications.resnet50 import preprocess_input
+                img_array = preprocess_input(img_array * 255.0)
+                
+                return img_array
+            else:
+                # Para outros formatos, usar função existente
+                return self.load_and_preprocess_image_p10(image_path, num_slices=1)
+        except Exception as e:
+            print(f"   Erro ao carregar {image_path}: {e}")
+            return None
+    
+    def create_resnet50_regressor_model(self, input_shape=(224, 224, 3), dropout_rate=0.5, dense_units=64, use_augmentation=True):
         """
         Cria modelo ResNet50 para regressão (estimação de idade).
-        Similar ao classificador, mas com saída linear.
+        Usa base_model diretamente (não get_layer).
         """
         # Input layer
         inputs = Input(shape=input_shape)
         x = inputs
         
-        # Data augmentation (apenas no treino)
-        x = RandomRotation(0.05, fill_mode='nearest')(x)
-        x = RandomZoom(0.1, fill_mode='nearest')(x)
+        # Data augmentation leve para MRI (apenas no treino)
+        if use_augmentation:
+            from tensorflow.keras.layers import Lambda
+            # Rotação pequena (±5 graus)
+            x = RandomRotation(0.087, fill_mode='nearest')(x)  # ~5 graus
+            # Zoom leve (5%)
+            x = RandomZoom(0.05, fill_mode='nearest')(x)
+            # Shift pequeno (5%)
+            x = RandomTranslation(0.05, 0.05, fill_mode='nearest')(x)
+            # Ruído gaussiano leve
+            def add_gaussian_noise(x):
+                noise = tf.random.normal(tf.shape(x), mean=0.0, stddev=0.01)
+                return x + noise
+            x = Lambda(add_gaussian_noise)(x)
         
-        # Carregar ResNet50 pré-treinado
+        # Carregar ResNet50 pré-treinado (usar base_model diretamente)
         base_model = ResNet50(
             weights='imagenet',
             include_top=False,
@@ -3575,7 +3757,7 @@ class AlzheimerApp:
         
         model = Model(inputs=inputs, outputs=predictions)
         
-        return model
+        return model, base_model
     
     def train_deep_regressor_internal(self, base_image_dir="images"):
         """Treina e avalia o regressor profundo (imagens) para estimar idade"""
@@ -3620,15 +3802,38 @@ class AlzheimerApp:
                 print("   ERRO: Não foi possível encontrar pasta de imagens!")
                 return None
         
-        # Preparar dados de treino
-        print("\n2. Preparando dados de treino...")
+        # Extrair subject_id do filename e fazer merge com CSV antes do split
+        print("\n2. Extraindo subject_id dos filenames e fazendo merge com CSV...")
+        import re
+        
+        def extract_subject_id_from_filename(filename):
+            """Extrai subject_id do filename (ex: OAS2_0001_MR1 -> OAS2_0001)"""
+            if pd.isna(filename):
+                return None
+            # Padrão: OAS2_XXXX_MR*
+            match = re.match(r'([A-Z0-9]+_\d+)', str(filename))
+            if match:
+                return match.group(1)
+            return None
+        
+        # Adicionar subject_id aos dataframes
+        if 'Subject ID' not in train_df.columns:
+            train_df['Subject ID'] = train_df.get('MRI ID', train_df.index).apply(extract_subject_id_from_filename)
+        if 'Subject ID' not in val_df.columns:
+            val_df['Subject ID'] = val_df.get('MRI ID', val_df.index).apply(extract_subject_id_from_filename)
+        if 'Subject ID' not in test_df.columns:
+            test_df['Subject ID'] = test_df.get('MRI ID', test_df.index).apply(extract_subject_id_from_filename)
+        
+        # Preparar dados de treino (usar slice AXIAL central)
+        print("\n3. Preparando dados de treino (slice axial central)...")
         X_train = []
         y_train = []
         
         for idx, row in train_df.iterrows():
             img_path = self.get_image_path_p10(row, train_df, base_image_dir)
             if img_path and os.path.exists(img_path):
-                img = self.load_and_preprocess_image_p10(img_path)
+                # Usar função específica para slice axial
+                img = self.load_nifti_axial_slice_for_regression(img_path)
                 if img is not None:
                     age = pd.to_numeric(row[age_col], errors='coerce')
                     if pd.notna(age):
@@ -3636,14 +3841,14 @@ class AlzheimerApp:
                         y_train.append(float(age))
         
         # Preparar dados de validação
-        print("\n3. Preparando dados de validação...")
+        print("\n4. Preparando dados de validação (slice axial central)...")
         X_val = []
         y_val = []
         
         for idx, row in val_df.iterrows():
             img_path = self.get_image_path_p10(row, val_df, base_image_dir)
             if img_path and os.path.exists(img_path):
-                img = self.load_and_preprocess_image_p10(img_path)
+                img = self.load_nifti_axial_slice_for_regression(img_path)
                 if img is not None:
                     age = pd.to_numeric(row[age_col], errors='coerce')
                     if pd.notna(age):
@@ -3651,14 +3856,14 @@ class AlzheimerApp:
                         y_val.append(float(age))
         
         # Preparar dados de teste
-        print("\n4. Preparando dados de teste...")
+        print("\n5. Preparando dados de teste (slice axial central)...")
         X_test = []
         y_test = []
         
         for idx, row in test_df.iterrows():
             img_path = self.get_image_path_p10(row, test_df, base_image_dir)
             if img_path and os.path.exists(img_path):
-                img = self.load_and_preprocess_image_p10(img_path)
+                img = self.load_nifti_axial_slice_for_regression(img_path)
                 if img is not None:
                     age = pd.to_numeric(row[age_col], errors='coerce')
                     if pd.notna(age):
@@ -3671,6 +3876,10 @@ class AlzheimerApp:
         
         print(f"\n   Imagens carregadas - Treino: {len(X_train)}, Val: {len(X_val)}, Teste: {len(X_test)}")
         
+        if len(X_train) == 0:
+            print("\n   ERRO: Nenhuma imagem válida encontrada para treino!")
+            return None
+        
         # Converter para arrays numpy
         X_train = np.array(X_train)
         X_val = np.array(X_val)
@@ -3681,20 +3890,37 @@ class AlzheimerApp:
         
         print(f"   Idade média - Treino: {y_train.mean():.1f} anos, Val: {y_val.mean():.1f} anos, Teste: {y_test.mean():.1f} anos")
         
+        # Normalizar target Age com média/desvio do treino
+        print("\n6. Normalizando target Age (média/desvio do treino)...")
+        age_mean = y_train.mean()
+        age_std = y_train.std()
+        print(f"   Média (treino): {age_mean:.2f} anos")
+        print(f"   Desvio padrão (treino): {age_std:.2f} anos")
+        
+        y_train_norm = (y_train - age_mean) / (age_std + 1e-8)
+        y_val_norm = (y_val - age_mean) / (age_std + 1e-8)
+        y_test_norm = (y_test - age_mean) / (age_std + 1e-8)
+        
         # Criar modelo - ESTÁGIO A: congelar todo o backbone
-        print("\n5. Criando modelo ResNet50 para regressão (Estágio A: backbone congelado)...")
-        model = self.create_resnet50_regressor_model(
+        print("\n7. Criando modelo ResNet50 para regressão (Estágio A: backbone congelado)...")
+        model, base_model = self.create_resnet50_regressor_model(
             dropout_rate=0.5,
-            dense_units=64
+            dense_units=64,
+            use_augmentation=True
         )
         
         # ESTÁGIO A: Treinar apenas o head
-        print("\n6. ESTÁGIO A: Treinando apenas o head (backbone congelado)...")
+        print("\n8. ESTÁGIO A: Treinando apenas o head (backbone congelado)...")
         print("   Learning rate: 1e-3, epochs: 8, batch_size: 8")
+        print("   Loss: Huber (delta=1.0) - mais robusto que MSE para outliers")
+        
+        # Usar Huber loss (mais robusto que MSE)
+        from tensorflow.keras.losses import Huber
+        huber_loss = Huber(delta=1.0)
         
         model.compile(
             optimizer=Adam(learning_rate=1e-3),
-            loss='mean_absolute_error',  # MAE loss
+            loss=huber_loss,  # Huber loss (alternativa: 'mean_squared_error')
             metrics=['mean_absolute_error']  # MAE como métrica
         )
         
@@ -3715,34 +3941,30 @@ class AlzheimerApp:
             verbose=1
         )
         
-        # Treinar Estágio A
+        # Treinar Estágio A (usar target normalizado)
         history_a = model.fit(
-            X_train, y_train,
-            validation_data=(X_val, y_val),
+            X_train, y_train_norm,
+            validation_data=(X_val, y_val_norm),
             epochs=8,
             batch_size=8,
             callbacks=[early_stopping_a, reduce_lr_a],
             verbose=1
         )
         
-        # ESTÁGIO B: Descongelar últimas camadas e fine-tune
-        print("\n7. ESTÁGIO B: Descongelando últimas 10 camadas para fine-tuning...")
+        # ESTÁGIO B: Descongelar últimas 20 camadas (ou bloco conv5_x) e fine-tune
+        print("\n9. ESTÁGIO B: Descongelando últimas 20 camadas (bloco conv5_x) para fine-tuning...")
         print("   Learning rate: 1e-5, epochs: 8, batch_size: 8")
         
-        # Encontrar o ResNet50 base_model
-        base_model = None
-        for layer in model.layers:
-            if isinstance(layer, Model):
-                if hasattr(layer, 'layers') and len(layer.layers) > 100:
-                    base_model = layer
-                    print(f"   ResNet50 encontrado: {layer.name} com {len(layer.layers)} camadas")
-                    break
-        
+        # Usar base_model diretamente (já retornado pela função)
         if base_model is not None:
-            # Descongelar últimas 10 camadas
+            # Descongelar últimas 20 camadas (ou bloco conv5_x)
             total_layers = len(base_model.layers)
+            conv5_start = max(0, total_layers - 20)  # Últimas ~20 camadas
+            print(f"   Total de camadas no ResNet50: {total_layers}")
+            print(f"   Descongelando últimas 20 camadas (a partir da camada {conv5_start})...")
+            
             for i, layer in enumerate(base_model.layers):
-                if i < total_layers - 10:
+                if i < conv5_start:
                     layer.trainable = False
                 else:
                     layer.trainable = True
@@ -3750,7 +3972,7 @@ class AlzheimerApp:
             # Recompilar com learning rate menor
             model.compile(
                 optimizer=Adam(learning_rate=1e-5),
-                loss='mean_absolute_error',
+                loss=huber_loss,  # Manter Huber loss
                 metrics=['mean_absolute_error']
             )
             
@@ -3771,10 +3993,10 @@ class AlzheimerApp:
                 verbose=1
             )
             
-            # Treinar Estágio B
+            # Treinar Estágio B (usar target normalizado)
             history_b = model.fit(
-                X_train, y_train,
-                validation_data=(X_val, y_val),
+                X_train, y_train_norm,
+                validation_data=(X_val, y_val_norm),
                 epochs=8,
                 batch_size=8,
                 callbacks=[early_stopping_b, reduce_lr_b],
@@ -3821,17 +4043,21 @@ class AlzheimerApp:
         plt.close()
         print("   Salvo: learning_curve_regressor_profundo.png")
         
-        # Avaliar no teste
+        # Avaliar no teste (desnormalizar predições)
         if len(X_test) > 0:
-            print("\n9. Avaliando no conjunto de teste...")
-            y_test_pred = model.predict(X_test, verbose=0).flatten()
+            print("\n10. Avaliando no conjunto de teste...")
+            y_test_pred_norm = model.predict(X_test, verbose=0).flatten()
+            
+            # Desnormalizar predições
+            y_test_pred = y_test_pred_norm * age_std + age_mean
+            print(f"   Predições desnormalizadas (média: {y_test_pred.mean():.1f} anos)")
             
             test_mae = mean_absolute_error(y_test, y_test_pred)
             test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
             test_r2 = r2_score(y_test, y_test_pred)
             
             # Plotar gráfico Predito vs Real
-            print("\n10. Gerando gráfico Predito vs Real...")
+            print("\n11. Gerando gráfico Predito vs Real...")
             plt.figure(figsize=(10, 8))
             
             plt.scatter(y_test, y_test_pred, alpha=0.6, s=50)
@@ -3861,22 +4087,136 @@ class AlzheimerApp:
             print(f"R² (Coeficiente de Determinação): {test_r2:.4f}")
             print("="*70 + "\n")
             
-            # Análise final
+            # Análise: (a) As entradas são suficientes para boa predição?
+            print("\n" + "="*70)
+            print("ANÁLISE: SUFICIÊNCIA DAS ENTRADAS")
+            print("="*70)
+            print(f"Regressor Profundo (ResNet50):")
+            print(f"  MAE: {test_mae:.2f} anos")
+            print(f"  RMSE: {test_rmse:.2f} anos")
+            print(f"  R²: {test_r2:.4f}")
+            
+            # Comentário sobre qualidade
+            if test_mae < 5.0 and test_r2 > 0.5:
+                print("\n  ✓ Qualidade ACEITÁVEL: MAE baixo e R² razoável indicam que as imagens")
+                print("    NIfTI (slice axial) capturam informação relevante sobre a idade.")
+            elif test_mae < 10.0 and test_r2 > 0.3:
+                print("\n  ⚠ Qualidade MODERADA: As imagens fornecem alguma informação sobre idade,")
+                print("    mas há espaço para melhoria. Considere usar múltiplos slices ou")
+                print("    modelos mais complexos.")
+            else:
+                print("\n  ✗ Qualidade FRACA: O slice único pode não ser suficiente para predição")
+                print("    precisa de idade. Considere usar múltiplos slices ou combinar com")
+                print("    features tabulares.")
+            print("="*70 + "\n")
+            
+            # Análise: (b) Exames posteriores têm idade maior que exames anteriores?
+            print("\n" + "="*70)
+            print("ANÁLISE: MONOTONICIDADE DA IDADE POR VISITA")
+            print("="*70)
+            
+            # Combinar todos os dataframes para análise
+            all_df = pd.concat([train_df, val_df, test_df], ignore_index=True)
+            
+            # Verificar colunas disponíveis para patient_id e visit/date
+            patient_id_cols = ["Subject ID", "SubjectID", "patient_id", "Patient ID"]
+            visit_cols = ["Visit", "visit", "Session", "session", "Exam Date", "exam_date", "Date", "date"]
+            
+            patient_id_col = None
+            visit_col = None
+            
+            for col in patient_id_cols:
+                if col in all_df.columns:
+                    patient_id_col = col
+                    break
+            
+            for col in visit_cols:
+                if col in all_df.columns:
+                    visit_col = col
+                    break
+            
+            if patient_id_col and visit_col:
+                print(f"   Colunas encontradas: {patient_id_col}, {visit_col}")
+                
+                # Preparar dados para análise
+                df_analysis = all_df[[patient_id_col, visit_col, age_col]].copy()
+                df_analysis = df_analysis.dropna(subset=[patient_id_col, visit_col, age_col])
+                
+                # Converter visit para numérico se possível
+                df_analysis[visit_col] = pd.to_numeric(df_analysis[visit_col], errors='coerce')
+                df_analysis[age_col] = pd.to_numeric(df_analysis[age_col], errors='coerce')
+                df_analysis = df_analysis.dropna()
+                
+                # Ordenar por patient_id e visit
+                df_sorted = df_analysis.sort_values([patient_id_col, visit_col])
+                
+                violations = []
+                violation_details = []
+                
+                for pid, g in df_sorted.groupby(patient_id_col):
+                    if len(g) > 1:  # Apenas pacientes com múltiplas visitas
+                        ages = g[age_col].values
+                        visits = g[visit_col].values
+                        
+                        # Verificar se há violação (idade diminui entre visitas)
+                        if np.any(np.diff(ages) < 0):
+                            violations.append(pid)
+                            # Detalhar violações
+                            for i in range(len(ages) - 1):
+                                if ages[i+1] < ages[i]:
+                                    violation_details.append({
+                                        'patient_id': pid,
+                                        'visit1': visits[i],
+                                        'age1': ages[i],
+                                        'visit2': visits[i+1],
+                                        'age2': ages[i+1]
+                                    })
+                
+                print(f"\n   Total de pacientes com múltiplas visitas: {df_sorted[patient_id_col].nunique()}")
+                print(f"   Pacientes com violação de idade crescente: {len(violations)}")
+                
+                if violations:
+                    print(f"\n   ⚠ ATENÇÃO: Encontradas {len(violations)} violações de monotonicidade!")
+                    print("   (Idade diminuiu entre visitas consecutivas)")
+                    print("\n   Detalhes das violações:")
+                    for v in violation_details[:10]:  # Mostrar até 10
+                        print(f"     - {v['patient_id']}: Visit {v['visit1']} (idade {v['age1']:.1f}) -> "
+                              f"Visit {v['visit2']} (idade {v['age2']:.1f})")
+                    if len(violation_details) > 10:
+                        print(f"     ... e mais {len(violation_details) - 10} violações")
+                    print("\n   Possíveis causas:")
+                    print("     • Erros de entrada de dados")
+                    print("     • Diferentes métodos de cálculo de idade")
+                    print("     • Dados de diferentes estudos/fontes")
+                else:
+                    print("\n   ✓ Nenhuma violação encontrada! A idade cresce monotonicamente")
+                    print("     com as visitas, como esperado.")
+            else:
+                print("   ⚠ Colunas de patient_id ou visit não encontradas.")
+                if not patient_id_col:
+                    print(f"     Procurou por: {patient_id_cols}")
+                if not visit_col:
+                    print(f"     Procurou por: {visit_cols}")
+                print("   Não foi possível verificar monotonicidade da idade.")
+            
+            print("="*70 + "\n")
+            
+            # Análise final (limitações)
             print("\n" + "="*70)
             print("ANÁLISE: LIMITAÇÕES E SUFICIÊNCIA DAS ENTRADAS")
             print("="*70)
             print("""
 As entradas em cada caso apresentam limitações que afetam a qualidade da predição:
 
-REGRESSOR RASO (Tabular):
+REGRESSOR RASO (Linear Regression - Features Ventriculares):
 - Descritores ventriculares (area, perimeter, etc.) capturam apenas características morfológicas 
   específicas dos ventrículos, que podem não estar diretamente correlacionadas com a idade.
-- O dataset é pequeno (Treino: ~226, Teste: ~78 exames), o que limita a capacidade de 
-  generalização do modelo.
+- O dataset é pequeno, o que limita a capacidade de generalização do modelo.
 - Descritores manuais podem não capturar toda a variação relacionada ao envelhecimento cerebral.
+- Regressão Linear é um modelo simples que pode não capturar relações não-lineares complexas.
 
-REGRESSOR PROFUNDO (Imagens):
-- Uso de apenas um slice coronal central perde informação 3D importante do volume cerebral.
+REGRESSOR PROFUNDO (ResNet50 - Slice Axial):
+- Uso de apenas um slice axial central perde informação 3D importante do volume cerebral.
 - Transfer learning do ImageNet (imagens naturais) para MRI (imagens médicas) representa uma 
   diferença de domínio significativa, limitando a eficácia do conhecimento pré-treinado.
 - O dataset pequeno dificulta o fine-tuning adequado de redes profundas.
@@ -3885,8 +4225,8 @@ REGRESSOR PROFUNDO (Imagens):
 CONCLUSÃO:
 As entradas são limitadas para obter predições muito precisas. O regressor profundo tem 
 potencial para capturar padrões mais complexos, mas é limitado pelo tamanho do dataset e 
-pela diferença de domínio. O regressor raso é mais interpretável, mas os descritores 
-ventriculares isolados podem não ser suficientes para estimar idade com alta precisão.
+pela diferença de domínio. O regressor raso (Linear Regression) é mais interpretável, mas 
+os descritores ventriculares isolados podem não ser suficientes para estimar idade com alta precisão.
             """)
             print("="*70 + "\n")
             
