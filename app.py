@@ -196,7 +196,7 @@ class AlzheimerApp:
         # Canvas 3: Com Filtro + Segmentada
         segmented_frame = ttk.Frame(bottom_row_frame, relief=tk.RIDGE, padding="2")
         segmented_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.lbl_image_segmented = ttk.Label(segmented_frame, text="Segmentada (Contorno Vermelho)", 
+        self.lbl_image_segmented = ttk.Label(segmented_frame, text="Segmentada (Contorno)", 
                                              font=("Arial", 9, "bold"), foreground="red")
         self.lbl_image_segmented.pack(pady=1)
         self.canvas_segmented = tk.Canvas(segmented_frame, bg="gray", height=250)

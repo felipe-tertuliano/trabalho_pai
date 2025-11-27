@@ -1,9 +1,8 @@
 import os
-import glob
 
-output_folder = "imgs"
+input_folder = "axl_img"
 
-images_to_keep = [
+images_to_remove = [
     "OAS2_0013_MR2_axl",
     "OAS2_0048_MR5_axl",
     "OAS2_0081_MR1_axl",
@@ -19,19 +18,16 @@ images_to_keep = [
     "OAS2_0159_MR1_axl"
 ]
 
-images_to_keep_set = set(f"{name}.png" for name in images_to_keep)
-
-all_images = glob.glob(os.path.join(output_folder, "*.png"))
-
 removed_count = 0
 
-for image_path in all_images:
-    image_filename = os.path.basename(image_path)
-    if image_filename not in images_to_keep_set:
+for image_name in images_to_remove:
+    image_path = os.path.join(input_folder, f"{image_name}.nii")
+    if os.path.exists(image_path):
         os.remove(image_path)
-        print(f"Removido: {image_filename}")
+        print(f"Removido: {image_name}.nii")
         removed_count += 1
+    else:
+        print(f"Não encontrado: {image_name}.nii")
 
-print(f"\nTotal de {removed_count} imagens removidas da pasta '{output_folder}'")
-print(f"Mantidas {len(images_to_keep)} imagens na pasta")
+print(f"\nTotal de {removed_count} arquivos .nii removidos da pasta '{input_folder}'")
 
