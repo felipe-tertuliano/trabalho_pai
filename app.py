@@ -1,35 +1,21 @@
-################################################################################
 # TRABALHO PRÁTICO - PROCESSAMENTO E ANÁLISE DE IMAGENS (PUC MINAS)
-#
-# GRUPO: [INSIRA OS NOMES/MATRÍCULAS AQUI]
-#
-# ESPECIFICAÇÕES:
-#   - Dataset: Axial [cite: 51]
-#   - Regressor Raso: Regressão Linear [cite: 54]
-#   - Classificador Raso: XGBoost [cite: 55]
-#   - Modelos Profundos: ResNet50 [cite: 57]
-#
-# AVISO: Este é um arquivo de template. A lógica principal (marcada com #TODO)
-# deve ser implementada pelos alunos.
-################################################################################
+# GRUPO:
+#   - Brenno Augusto H. dos Santos
+#   - Eduardo Oliveira Coelho
+#   - Felipe Tadeu Góes Guimarães
+#   - Felipe Lacerda Tertuliano
 
-# --- 1. IMPORTAÇÕES ---
-# GUI
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, font
 from PIL import Image, ImageTk, ImageOps
-
-# Manipulação de Dados e Imagens
 import numpy as np
 import pandas as pd
-import cv2  # OpenCV
-import nibabel as nib  # Para arquivos Nifti
+import cv2
+import nibabel as nib
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
-from skimage import measure  # Para descritores morfológicos
-
-# Machine Learning
+from skimage import measure
 from sklearn.model_selection import GroupShuffleSplit, train_test_split, RandomizedSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
@@ -37,42 +23,33 @@ from sklearn.metrics import (
     mean_squared_error, r2_score, recall_score, mean_absolute_error,
     roc_curve, auc, precision_score, f1_score, roc_auc_score
 )
-from sklearn.linear_model import LinearRegression  # Regressor Raso
+from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.svm import SVR
 from sklearn.utils.class_weight import compute_class_weight
-import xgboost as xgb  # Classificador Raso
-
-# Deep Learning (TensorFlow com Keras)
+import xgboost as xgb
 import tensorflow as tf
 from tensorflow.keras.applications import ResNet50
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Input, Dropout, BatchNormalization
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.regularizers import l2
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.layers import RandomRotation, RandomZoom, RandomTranslation, RandomContrast
-
-# Para evitar problemas de exibição em algumas versões
 import os
 import warnings
-from pathlib import Path
+import sys
+import io
+import traceback
+import itertools
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
 warnings.filterwarnings('ignore')
 
-# Tentar importar seaborn, usar matplotlib se não disponível
 try:
     import seaborn as sns
     HAS_SEABORN = True
 except ImportError:
     HAS_SEABORN = False
 
-################################################################################
-# --- 2. CLASSE PRINCIPAL DA APLICAÇÃO (GUI) ---
-################################################################################
 
 class AlzheimerApp:
     def __init__(self, root):
@@ -80,18 +57,16 @@ class AlzheimerApp:
         self.root.title("Trabalho Prático - Diagnóstico de Alzheimer")
         self.root.geometry("1000x800")
         
-        # --- Variáveis de Estado ---
         self.current_font_size = 10
-        self.dataframe = None  # Armazena o CSV
+        self.dataframe = None
         self.image_path = None
-        self.original_image = None # Imagem PIL original
-        self.preprocessed_image = None # Imagem PIL pré-processada (com filtros)
-        self.segmented_image = None # Imagem PIL segmentada (com contorno)
-        self.image_mask = None # Máscara (numpy) da segmentação
-        self.features_df = None # DataFrame com características extraídas
-        self.current_filter = "none" # Filtro atual aplicado
+        self.original_image = None
+        self.preprocessed_image = None
+        self.segmented_image = None
+        self.image_mask = None
+        self.features_df = None
+        self.current_filter = "none"
         
-        # --- Variáveis de Zoom ---
         self.zoom_level_original = 1.0
         self.zoom_level_preprocessed = 1.0
         self.zoom_level_segmented = 1.0
@@ -105,99 +80,79 @@ class AlzheimerApp:
         self.is_panning_preprocessed = False
         self.is_panning_segmented = False
         
-        # --- Variáveis de Region Growing ---
         self.click_moved_original = False
         self.click_moved_preprocessed = False
-        self.region_growing_threshold = 50  # Threshold padrão: 50
-        self.region_growing_connectivity = 8  # Conectividade: 4 ou 8 (padrão 8)
-        self.use_histogram_equalization = True  # FIXO: CLAHE sempre ativado
-        self.use_otsu_for_segmentation = False  # Usar Otsu (binarizada) ou CLAHE (escala de cinza)
-        self.multi_seed_mode = False  # Modo de múltiplos seeds manual
-        self.accumulated_mask = None  # Máscara acumulada de múltiplos cliques
-        self.multi_seed_points = []  # Pontos coletados no modo multi-seed
+        self.region_growing_threshold = 50
+        self.region_growing_connectivity = 8
+        self.use_histogram_equalization = True
+        self.use_otsu_for_segmentation = False
+        self.multi_seed_mode = False
+        self.accumulated_mask = None
+        self.multi_seed_points = []
         
-        # --- Pós-processamento Morfológico (AJUSTÁVEL) ---
-        self.morphology_kernel_size = 15  # Ajustável via slider (3-25)
-        self.apply_closing = False  # Ajustável via checkbox
-        self.apply_fill_holes = True  # Ajustável via checkbox
-        self.apply_opening = True  # Ajustável via checkbox
-        self.apply_smooth_contours = True  # Ajustável via checkbox
+        self.morphology_kernel_size = 15
+        self.apply_closing = False
+        self.apply_fill_holes = True
+        self.apply_opening = True
+        self.apply_smooth_contours = True
         
-        # --- Variáveis de medição de coordenadas ---
-        self.show_coordinates = True  # Mostrar coordenadas do mouse
+        self.show_coordinates = True
         self.current_mouse_x = 0
         self.current_mouse_y = 0
         
-        # --- Seed points FIXOS para segmentação automática (EDITÁVEIS) ---
         self.auto_seed_points = [
             (158,98),
             (109,124),
             (109,81),
         ]
         
-        # Limite de pixels para validação de segmentação (se exceder, considera erro)
-        self.max_segmentation_pixels = 50000  # Ajustável - se máscara tiver mais pixels, considera erro
+        self.max_segmentation_pixels = 50000
         
-        # Método alternativo de segmentação quando Region Growing falha
-        self.alternative_segmentation_method = 'roi_fixed'  # Padrão: ROI fixa
-        # Opções: 'roi_fixed', 'spatial_mask', 'connected_components', 'centroid_based',
-        #         'hole_filling', 'flood_fill', 'distance_transform', 'watershed_markers', 'active_contours'
+        self.filter_history = []
+        self.original_image_backup = None
+        self.current_filtered_image = None
         
-        # --- Sistema de Pipeline de Filtros ---
-        self.filter_history = []  # Lista de filtros aplicados
-        self.original_image_backup = None  # Backup da imagem original
-        self.current_filtered_image = None  # Imagem com filtros aplicados
+        self.descriptors_list = []
         
-        # --- Sistema de Descritores Morfológicos ---
-        self.descriptors_list = []  # Lista para acumular descritores de todas as imagens
-        
-        # --- Variáveis para Parte 8 (Scatterplots) ---
         self.scatterplots_dir = "scatterplots"
-        self.scatterplot_files = []  # Lista de arquivos PNG gerados
+        self.scatterplot_files = []
         self.current_scatterplot_index = 0
         self.scatterplot_canvas = None
         self.scatterplot_figure = None
         
-        # --- Variáveis para Parte 9 (Split) ---
-        self.split_dataframe = None  # DataFrame para split
+        self.split_dataframe = None
         
-        # Parâmetros ajustáveis para cada filtro
+        self.metrics_raso = {'mae': None, 'rmse': None, 'r2': None}
+        self.metrics_profundo = {'mae': None, 'rmse': None, 'r2': None}
+        
         self.filter_params = {
-            'clahe_clip_limit': 2.0,  # CLAHE: 0.5 - 10.0
-            'clahe_grid_size': 8,     # CLAHE: 4 - 16
-            'gaussian_kernel': 5,      # Gaussian: 3, 5, 7, 9, 11, 13, 15
-            'median_kernel': 5,        # Median: 3, 5, 7, 9, 11
-            'bilateral_d': 9,          # Bilateral: 5 - 15
-            'bilateral_sigma': 75,     # Bilateral: 10 - 150
-            'canny_low': 50,           # Canny: 0 - 255
-            'canny_high': 150,         # Canny: 0 - 255
-            'erosion_kernel': 3,       # Erosão: 3, 5, 7, 9
-            'erosion_iterations': 1,   # Erosão: 1 - 10
+            'clahe_clip_limit': 2.0,
+            'clahe_grid_size': 8,
+            'gaussian_kernel': 5,
+            'median_kernel': 5,
+            'bilateral_d': 9,
+            'bilateral_sigma': 75,
+            'canny_low': 50,
+            'canny_high': 150,
+            'erosion_kernel': 3,
+            'erosion_iterations': 1,
         }
         
-        # Configura a fonte padrão
         self.default_font = font.nametofont("TkDefaultFont")
         self.default_font.configure(size=self.current_font_size)
         
-        # --- Layout Principal ---
-        # Menu Superior
         self.create_menu()
         
-        # Criar Notebook (abas)
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
         
-        # Criar abas
-        self.create_main_tab()  # Aba principal (conteúdo original)
-        self.create_parte8_tab()  # Aba Parte 8 - Scatterplots
-        self.create_parte9_tab()  # Aba Parte 9 - Split de Dados
-        self.create_parte10_tab()  # Aba XGBoost - Classificador Raso
-        self.create_resnet50_tab()  # Aba ResNet50 - Classificador Profundo
-        self.create_parte11_tab()  # Aba Parte 11 - Regressão de Idade
-        
-        # Frame Principal (mantido para compatibilidade, mas não usado diretamente)
-        # main_frame = ttk.Frame(root, padding="10")
-        # main_frame.pack(expand=True, fill=tk.BOTH)
+        self.create_main_tab()
+        self.create_parte8_tab()
+        self.create_parte9_tab()
+        self.create_parte10_tab()
+        self.create_resnet50_tab()
+        self.create_parte11_tab()
+        self.create_parte12_tab()
         
     def create_main_tab(self):
         """Cria a aba principal com todo o conteúdo original"""
@@ -219,7 +174,7 @@ class AlzheimerApp:
         # Canvas 1: Original (sem filtro)
         original_frame = ttk.Frame(top_row_frame, relief=tk.RIDGE, padding="2")
         original_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0,2))
-        self.lbl_image_original = ttk.Label(original_frame, text="📷 Original (Sem Filtro)", 
+        self.lbl_image_original = ttk.Label(original_frame, text="Original (Sem Filtro)", 
                                             font=("Arial", 9, "bold"), foreground="blue")
         self.lbl_image_original.pack(pady=1)
         self.canvas_original = tk.Canvas(original_frame, bg="gray", width=280, height=250)
@@ -228,7 +183,7 @@ class AlzheimerApp:
         # Canvas 2: Com Filtro
         preprocessed_frame = ttk.Frame(top_row_frame, relief=tk.RIDGE, padding="2")
         preprocessed_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(2,0))
-        self.lbl_image_preprocessed = ttk.Label(preprocessed_frame, text="🔧 Com Filtro", 
+        self.lbl_image_preprocessed = ttk.Label(preprocessed_frame, text="Com Filtro", 
                                                 font=("Arial", 9, "bold"), foreground="green")
         self.lbl_image_preprocessed.pack(pady=1)
         self.canvas_preprocessed = tk.Canvas(preprocessed_frame, bg="gray", width=280, height=250)
@@ -241,7 +196,7 @@ class AlzheimerApp:
         # Canvas 3: Com Filtro + Segmentada
         segmented_frame = ttk.Frame(bottom_row_frame, relief=tk.RIDGE, padding="2")
         segmented_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.lbl_image_segmented = ttk.Label(segmented_frame, text="✂️ Segmentada (Contorno Vermelho)", 
+        self.lbl_image_segmented = ttk.Label(segmented_frame, text="Segmentada (Contorno Vermelho)", 
                                              font=("Arial", 9, "bold"), foreground="red")
         self.lbl_image_segmented.pack(pady=1)
         self.canvas_segmented = tk.Canvas(segmented_frame, bg="gray", height=250)
@@ -250,7 +205,7 @@ class AlzheimerApp:
         # Frame de Controle e Log (à direita) com SCROLL
         control_container = ttk.Frame(images_and_controls_frame, width=380)
         control_container.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
-        control_container.pack_propagate(False)  # Força o tamanho fixo
+        control_container.pack_propagate(False)
         
         # Canvas para scroll
         control_canvas = tk.Canvas(control_container, width=360)
@@ -297,8 +252,7 @@ class AlzheimerApp:
         btn_reset_segmented = ttk.Button(zoom_frame, text="↻ Seg", command=lambda: self.reset_zoom("segmented"))
         btn_reset_segmented.pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
         
-        # Label para coordenadas do mouse
-        self.lbl_mouse_coords = ttk.Label(control_frame, text="🖱️ Mouse: X: -- | Y: --", 
+        self.lbl_mouse_coords = ttk.Label(control_frame, text="Mouse: X: -- | Y: --", 
                                           foreground="darkblue", font=("Courier", 9))
         self.lbl_mouse_coords.pack(pady=5)
         
@@ -313,7 +267,7 @@ class AlzheimerApp:
         section1_header = ttk.Frame(control_frame)
         section1_header.pack(fill=tk.X, pady=(5,0))
         
-        ttk.Label(section1_header, text="🔧 SEÇÃO 1: FILTROS", 
+        ttk.Label(section1_header, text="SEÇÃO 1: FILTROS", 
                   font=("Arial", 11, "bold"), foreground="darkgreen").pack(side=tk.LEFT, padx=5)
         
         # Frame da seção 1
@@ -347,8 +301,7 @@ class AlzheimerApp:
         ttk.Radiobutton(rb_filter_frame, text="Erosão (Morphology)", 
                        variable=self.filter_mode, value="erosion").pack(anchor=tk.W, padx=20)
         
-        # --- Parâmetros de Filtros ---
-        ttk.Label(self.section1_frame, text="⚙️ Parâmetros do Filtro:", foreground="blue").pack(pady=(10,2))
+        ttk.Label(self.section1_frame, text="Parâmetros do Filtro:", foreground="blue").pack(pady=(10,2))
         
         # Frame com scroll para parâmetros
         params_canvas = tk.Canvas(self.section1_frame, height=120, bg="white")
@@ -443,11 +396,10 @@ class AlzheimerApp:
         self.slider_erosion_iterations.set(1)
         self.slider_erosion_iterations.grid(row=9, column=2, padx=5)
         
-        # --- Botões de Filtros ---
         filter_buttons = ttk.Frame(self.section1_frame)
         filter_buttons.pack(pady=5, fill=tk.X)
         
-        btn_apply_filter = ttk.Button(filter_buttons, text="✅ Aplicar Filtro", 
+        btn_apply_filter = ttk.Button(filter_buttons, text="Aplicar Filtro", 
                                       command=self.apply_selected_filter)
         btn_apply_filter.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
         
@@ -455,8 +407,7 @@ class AlzheimerApp:
                                        command=self.reset_filters)
         btn_reset_filters.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
         
-        # Histórico de filtros
-        ttk.Label(self.section1_frame, text="📜 Filtros Aplicados:", foreground="blue", font=("Arial", 8)).pack(pady=(5,0))
+        ttk.Label(self.section1_frame, text="Filtros Aplicados:", foreground="blue", font=("Arial", 8)).pack(pady=(5,0))
         
         self.lbl_filter_history = ttk.Label(self.section1_frame, text="Nenhum", 
                                             foreground="gray", font=("Arial", 7), wraplength=340)
@@ -477,20 +428,19 @@ class AlzheimerApp:
         section2_header = ttk.Frame(control_frame)
         section2_header.pack(fill=tk.X, pady=(5,0))
         
-        ttk.Label(section2_header, text="✂️ SEÇÃO 2: SEGMENTAÇÃO", 
+        ttk.Label(section2_header, text="SEÇÃO 2: SEGMENTAÇÃO", 
                   font=("Arial", 11, "bold"), foreground="darkblue").pack(side=tk.LEFT, padx=5)
         
         # Frame da seção 2
         self.section2_frame = ttk.Frame(control_frame)
         self.section2_frame.pack(fill=tk.X, pady=5)
         
-        # Informação sobre qual imagem é usada
         info_frame = ttk.Frame(self.section2_frame)
         info_frame.pack(pady=(5,10), fill=tk.X)
-        ttk.Label(info_frame, text="ℹ️ A segmentação SEMPRE usa a Janela 2 (Pré-processada)", 
+        ttk.Label(info_frame, text="A segmentação SEMPRE usa a Janela 2 (Pré-processada)", 
                   foreground="darkblue", font=("Arial", 8, "italic"), wraplength=340).pack(padx=5)
         
-        ttk.Label(self.section2_frame, text="⚙️ Parâmetros de Segmentação:", foreground="blue", font=("Arial", 9, "bold")).pack(pady=(5,5))
+        ttk.Label(self.section2_frame, text="Parâmetros de Segmentação:", foreground="blue", font=("Arial", 9, "bold")).pack(pady=(5,5))
         
         # Threshold do Region Growing
         threshold_frame = ttk.Frame(self.section2_frame)
@@ -510,9 +460,9 @@ class AlzheimerApp:
         ttk.Label(connectivity_frame, text="Conectividade:", foreground="blue").pack(side=tk.LEFT, padx=5)
         
         self.connectivity_var = tk.IntVar(value=8)
-        ttk.Radiobutton(connectivity_frame, text="4-vizinhos (↑↓←→)", 
+        ttk.Radiobutton(connectivity_frame, text="4-vizinhos", 
                        variable=self.connectivity_var, value=4).pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(connectivity_frame, text="8-vizinhos (↑↓←→↖↗↙↘)", 
+        ttk.Radiobutton(connectivity_frame, text="8-vizinhos", 
                        variable=self.connectivity_var, value=8).pack(side=tk.LEFT, padx=5)
         
         # Kernel Morfológico
@@ -531,22 +481,22 @@ class AlzheimerApp:
         ttk.Label(self.section2_frame, text="Operações Morfológicas:", foreground="blue").pack(pady=(10,5))
         
         self.var_opening = tk.BooleanVar(value=True)
-        chk_opening = ttk.Checkbutton(self.section2_frame, text="🔹 Abertura (remover ruído)", 
+        chk_opening = ttk.Checkbutton(self.section2_frame, text="Abertura (remover ruído)", 
                                       variable=self.var_opening, command=self.update_morphology_flags)
         chk_opening.pack(anchor=tk.W, padx=20)
         
         self.var_closing = tk.BooleanVar(value=False)
-        chk_closing = ttk.Checkbutton(self.section2_frame, text="🔹 Fechamento (fechar gaps)", 
+        chk_closing = ttk.Checkbutton(self.section2_frame, text="Fechamento (fechar gaps)", 
                                       variable=self.var_closing, command=self.update_morphology_flags)
         chk_closing.pack(anchor=tk.W, padx=20)
         
         self.var_fill_holes = tk.BooleanVar(value=True)
-        chk_fill_holes = ttk.Checkbutton(self.section2_frame, text="🔹 Preencher buracos", 
+        chk_fill_holes = ttk.Checkbutton(self.section2_frame, text="Preencher buracos", 
                                          variable=self.var_fill_holes, command=self.update_morphology_flags)
         chk_fill_holes.pack(anchor=tk.W, padx=20)
         
         self.var_smooth = tk.BooleanVar(value=True)
-        chk_smooth = ttk.Checkbutton(self.section2_frame, text="🔹 Suavizar contornos", 
+        chk_smooth = ttk.Checkbutton(self.section2_frame, text="Suavizar contornos", 
                                      variable=self.var_smooth, command=self.update_morphology_flags)
         chk_smooth.pack(anchor=tk.W, padx=20)
         
@@ -559,17 +509,10 @@ class AlzheimerApp:
         # Método de segmentação
         self.segmentation_method = tk.StringVar(value="region_growing")
         
-        ttk.Radiobutton(self.section2_frame, text="🌱 Region Growing (clique para seed)", 
+        ttk.Radiobutton(self.section2_frame, text="Region Growing (clique para seed)", 
                        variable=self.segmentation_method, value="region_growing").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(self.section2_frame, text="🎯 Watershed", 
-                       variable=self.segmentation_method, value="watershed").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(self.section2_frame, text="🔲 Thresholding Adaptativo", 
-                       variable=self.segmentation_method, value="adaptive_threshold").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(self.section2_frame, text="🧲 K-Means Clustering", 
-                       variable=self.segmentation_method, value="kmeans").pack(anchor=tk.W, padx=20)
         
-        # Edição de Seeds Fixos
-        seeds_edit_frame = ttk.LabelFrame(self.section2_frame, text="📍 Seeds Fixos (Editáveis)", padding="5")
+        seeds_edit_frame = ttk.LabelFrame(self.section2_frame, text="Seeds Fixos (Editáveis)", padding="5")
         seeds_edit_frame.pack(pady=(10,5), fill=tk.X)
         
         # Lista de seeds
@@ -593,21 +536,20 @@ class AlzheimerApp:
         ttk.Label(add_seed_frame, text="Y:").pack(side=tk.LEFT, padx=2)
         self.auto_seed_y_entry = ttk.Entry(add_seed_frame, width=6)
         self.auto_seed_y_entry.pack(side=tk.LEFT, padx=2)
-        ttk.Button(add_seed_frame, text="➕ Adicionar", 
+        ttk.Button(add_seed_frame, text="Adicionar", 
                    command=self.add_auto_seed, width=12).pack(side=tk.LEFT, padx=5)
         
-        # Remover seed selecionado
-        ttk.Button(seeds_buttons_frame, text="➖ Remover Selecionado", 
+        ttk.Button(seeds_buttons_frame, text="Remover Selecionado", 
                    command=self.remove_auto_seed).pack(pady=2, fill=tk.X)
         
         # Botões de Segmentação
         ttk.Label(self.section2_frame, text="Executar Segmentação:", foreground="blue").pack(pady=(10,2))
         
-        btn_segment_auto = ttk.Button(self.section2_frame, text="▶ Segmentação Automática (Seeds Fixos)", 
+        btn_segment_auto = ttk.Button(self.section2_frame, text="Segmentação Automática (Seeds Fixos)", 
                                       command=self.segment_ventricles)
         btn_segment_auto.pack(pady=2, fill=tk.X)
         
-        btn_multi_segment = ttk.Button(self.section2_frame, text="🖱️ Modo Multi-Seed (Clique nas Janelas)", 
+        btn_multi_segment = ttk.Button(self.section2_frame, text="Modo Multi-Seed (Clique nas Janelas)", 
                                        command=self.toggle_multi_seed_mode)
         btn_multi_segment.pack(pady=2, fill=tk.X)
         
@@ -630,7 +572,7 @@ class AlzheimerApp:
         batch_header = ttk.Frame(control_frame)
         batch_header.pack(fill=tk.X, pady=(5,0))
         
-        ttk.Label(batch_header, text="📁 PROCESSAR PASTA INTEIRA", 
+        ttk.Label(batch_header, text="PROCESSAR PASTA INTEIRA", 
                   font=("Arial", 11, "bold"), foreground="darkorange").pack(side=tk.LEFT, padx=5)
         
         # Frame do batch
@@ -638,7 +580,7 @@ class AlzheimerApp:
         batch_frame.pack(fill=tk.X, pady=5)
         
         # Botão principal para abrir configuração
-        btn_batch_config = ttk.Button(batch_frame, text="⚙️ Configurar e Processar Pasta", 
+        btn_batch_config = ttk.Button(batch_frame, text="Configurar e Processar Pasta", 
                                       command=self.open_batch_config_window)
         btn_batch_config.pack(pady=5, fill=tk.X, padx=5)
         
@@ -671,7 +613,6 @@ class AlzheimerApp:
         ttk.Label(left_frame_p8, text="Visualização do Scatterplot", 
                  font=("Arial", 11, "bold")).pack(pady=5)
         
-        # Label de status (fora do canvas para não ser destruído)
         self.lbl_scatterplot_status = ttk.Label(
             left_frame_p8, 
             text="Nenhum gráfico carregado.\nSelecione um arquivo CSV e gere os gráficos.",
@@ -684,7 +625,6 @@ class AlzheimerApp:
         self.scatterplot_canvas_frame = ttk.Frame(left_frame_p8)
         self.scatterplot_canvas_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Label inicial dentro do canvas (será substituído pela imagem)
         initial_label = ttk.Label(
             self.scatterplot_canvas_frame, 
             text="",
@@ -705,7 +645,7 @@ class AlzheimerApp:
         self.lbl_scatterplot_info = ttk.Label(nav_frame, text="0 / 0")
         self.lbl_scatterplot_info.pack(side=tk.LEFT, padx=10)
         
-        self.btn_next_scatter = ttk.Button(nav_frame, text="Próximo ▶", 
+        self.btn_next_scatter = ttk.Button(nav_frame, text="Próximo", 
                                           command=self.show_next_scatterplot,
                                           state=tk.DISABLED)
         self.btn_next_scatter.pack(side=tk.LEFT, padx=5)
@@ -867,7 +807,6 @@ class AlzheimerApp:
         xgb_tab = ttk.Frame(self.notebook)
         self.notebook.add(xgb_tab, text="XGBoost - Classificador Raso")
         
-        # Frame principal
         main_frame_xgb = ttk.Frame(xgb_tab)
         main_frame_xgb.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
@@ -878,20 +817,18 @@ class AlzheimerApp:
                  text="Classificador baseado em descritores manuais usando XGBoost com Random Search automático.",
                  wraplength=700).pack(pady=5)
         
-        # Informação sobre Random Search
-        info_frame_xgb = ttk.LabelFrame(main_frame_xgb, text="ℹ️ Informações", padding="10")
+        info_frame_xgb = ttk.LabelFrame(main_frame_xgb, text="Informações", padding="10")
         info_frame_xgb.pack(fill=tk.X, pady=10, padx=10)
         
         ttk.Label(info_frame_xgb, 
-                 text="• Random Search automático: 100 iterações, 3-fold CV, métrica ROC-AUC\n"
-                      "• Early Stopping: para automaticamente se não houver melhoria\n"
-                      "• Normalização: StandardScaler aplicado aos dados\n"
-                      "• Features: area, perimeter, eccentricity, extent, solidity\n"
-                      "• Gera: curva de aprendizado e matriz de confusão",
+                 text="- Random Search: 100 iterações, 3-fold CV, ROC-AUC\n"
+                      "- Early stopping: interrompe se sem melhoria\n"
+                      "- Normalização: StandardScaler\n"
+                      "- Features: area, perimeter, eccentricity, extent, solidity\n"
+                      "- Saídas: curva de aprendizado e matriz de confusão",
                  wraplength=700,
                  justify=tk.LEFT).pack(pady=5)
         
-        # Botões de execução
         ttk.Separator(main_frame_xgb, orient='horizontal').pack(fill=tk.X, pady=20)
         ttk.Label(main_frame_xgb, text="Executar Classificador:", 
                  font=("Arial", 11, "bold")).pack(pady=(10, 5))
@@ -907,7 +844,6 @@ class AlzheimerApp:
         )
         btn_train_xgb.pack(pady=5)
         
-        # Status
         self.lbl_status_p10 = ttk.Label(
             main_frame_xgb, 
             text="Aguardando...",
@@ -915,7 +851,6 @@ class AlzheimerApp:
         )
         self.lbl_status_p10.pack(pady=5)
         
-        # Área de resultados (scrollable)
         ttk.Separator(main_frame_xgb, orient='horizontal').pack(fill=tk.X, pady=20)
         ttk.Label(main_frame_xgb, text="Resultados:", 
                  font=("Arial", 11, "bold")).pack(pady=(10, 5))
@@ -935,10 +870,9 @@ class AlzheimerApp:
         self.text_results_p10.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar_results_xgb.config(command=self.text_results_p10.yview)
         
-        self.text_results_p10.insert(tk.END, "Os resultados do XGBoost serão exibidos aqui...\n\n")
-        self.text_results_p10.insert(tk.END, "ℹ️ NOTA: O XGBoost executa Random Search automático (100 iterações, 3-fold CV, ROC-AUC)\n")
-        self.text_results_p10.insert(tk.END, "   com normalização de dados e early stopping para otimizar hiperparâmetros.\n")
-        self.text_results_p10.insert(tk.END, "   Isso pode levar alguns minutos, mas melhora significativamente a generalização.\n")
+        self.text_results_p10.insert(tk.END, "Os resultados serão exibidos aqui após o treinamento.\n\n")
+        self.text_results_p10.insert(tk.END, "O XGBoost realiza busca automática de hiperparâmetros usando Random Search (100 iterações, 3-fold CV).\n")
+        self.text_results_p10.insert(tk.END, "O processo pode levar alguns minutos, mas garante melhor generalização do modelo.\n")
         self.text_results_p10.config(state=tk.DISABLED)
     
     def create_resnet50_tab(self):
@@ -946,7 +880,6 @@ class AlzheimerApp:
         resnet_tab = ttk.Frame(self.notebook)
         self.notebook.add(resnet_tab, text="ResNet50 - Classificador Profundo")
         
-        # Frame principal
         main_frame_resnet = ttk.Frame(resnet_tab)
         main_frame_resnet.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
@@ -957,27 +890,24 @@ class AlzheimerApp:
                  text="Classificador baseado em imagens usando ResNet50 com fine-tuning do ImageNet.",
                  wraplength=700).pack(pady=5)
         
-        # Informação sobre ResNet50
-        info_frame_resnet = ttk.LabelFrame(main_frame_resnet, text="ℹ️ Informações", padding="10")
+        info_frame_resnet = ttk.LabelFrame(main_frame_resnet, text="Informações", padding="10")
         info_frame_resnet.pack(fill=tk.X, pady=10, padx=10)
         
         ttk.Label(info_frame_resnet, 
-                 text="• Transfer Learning: pesos pré-treinados no ImageNet\n"
-                      "• Fine-tuning: últimas 10 camadas treináveis\n"
-                      "• Otimizador: Adam com learning rate 1e-4\n"
-                      "• Early Stopping: para automaticamente se não houver melhoria\n"
-                      "• Formatos suportados: .png, .jpg, .jpeg, .nii, .nii.gz (NIfTI)\n"
-                      "• Para imagens 3D (.nii): extrai slice axial central automaticamente\n"
-                      "• Gera: curva de aprendizado e matriz de confusão",
+                 text="- Transfer learning com pesos ImageNet\n"
+                      "- Fine-tuning: últimas 10 camadas\n"
+                      "- Otimizador: Adam (lr=1e-4)\n"
+                      "- Early stopping: interrompe se sem melhoria\n"
+                      "- Formatos: .png, .jpg, .jpeg, .nii, .nii.gz\n"
+                      "- Imagens 3D (.nii): extrai slice axial central\n"
+                      "- Saídas: curva de aprendizado e matriz de confusão",
                  wraplength=700,
                  justify=tk.LEFT).pack(pady=5)
         
-        # Seção de configuração
         ttk.Separator(main_frame_resnet, orient='horizontal').pack(fill=tk.X, pady=20)
         ttk.Label(main_frame_resnet, text="Configurações:", 
                  font=("Arial", 11, "bold")).pack(pady=(10, 5))
         
-        # Pasta de imagens
         config_frame_resnet = ttk.Frame(main_frame_resnet)
         config_frame_resnet.pack(fill=tk.X, pady=5)
         
@@ -990,7 +920,6 @@ class AlzheimerApp:
                                       command=self.browse_image_dir_resnet)
         btn_browse_images_resnet.pack(side=tk.LEFT, padx=5)
         
-        # Botões de execução
         ttk.Separator(main_frame_resnet, orient='horizontal').pack(fill=tk.X, pady=20)
         ttk.Label(main_frame_resnet, text="Executar Classificador:", 
                  font=("Arial", 11, "bold")).pack(pady=(10, 5))
@@ -1006,7 +935,6 @@ class AlzheimerApp:
         )
         btn_train_resnet.pack(pady=5)
         
-        # Status
         self.lbl_status_resnet = ttk.Label(
             main_frame_resnet, 
             text="Aguardando...",
@@ -1014,7 +942,6 @@ class AlzheimerApp:
         )
         self.lbl_status_resnet.pack(pady=5)
         
-        # Área de resultados (scrollable)
         ttk.Separator(main_frame_resnet, orient='horizontal').pack(fill=tk.X, pady=20)
         ttk.Label(main_frame_resnet, text="Resultados:", 
                  font=("Arial", 11, "bold")).pack(pady=(10, 5))
@@ -1034,25 +961,20 @@ class AlzheimerApp:
         self.text_results_resnet.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar_results_resnet.config(command=self.text_results_resnet.yview)
         
-        self.text_results_resnet.insert(tk.END, "Os resultados do ResNet50 serão exibidos aqui...\n\n")
-        self.text_results_resnet.insert(tk.END, "ℹ️ NOTA: O ResNet50 usa transfer learning do ImageNet com fine-tuning.\n")
-        self.text_results_resnet.insert(tk.END, "   Formatos suportados: .png, .jpg, .jpeg, .nii, .nii.gz\n")
-        self.text_results_resnet.insert(tk.END, "   Para imagens NIfTI (.nii): extrai slice axial central automaticamente (não coronal).\n")
-        self.text_results_resnet.insert(tk.END, "   Certifique-se de que a pasta de imagens está configurada corretamente.\n")
+        self.text_results_resnet.insert(tk.END, "Os resultados serão exibidos aqui após o treinamento.\n\n")
+        self.text_results_resnet.insert(tk.END, "O modelo utiliza transfer learning (ImageNet) com fine-tuning.\n")
+        self.text_results_resnet.insert(tk.END, "Formatos aceitos: PNG, JPG, JPEG, NIfTI (.nii, .nii.gz)\n")
+        self.text_results_resnet.insert(tk.END, "Para imagens 3D, o slice axial central é extraído automaticamente.\n")
+        self.text_results_resnet.insert(tk.END, "Verifique se o caminho da pasta de imagens está correto antes de iniciar.\n")
         self.text_results_resnet.config(state=tk.DISABLED)
     
-    # --- PARTE 11: REGRESSÃO DE IDADE ---
     
     def create_parte11_tab(self):
         """Cria as abas Parte 11 - Regressão de Idade (Raso e Profundo separados)"""
-        # Criar notebook para as sub-abas
         parte11_notebook = ttk.Notebook(self.notebook)
         self.notebook.add(parte11_notebook, text="Parte 11 - Regressão de Idade")
         
-        # Aba 1: Regressor Raso
         self.create_regressor_raso_tab(parte11_notebook)
-        
-        # Aba 2: Regressor Profundo
         self.create_regressor_profundo_tab(parte11_notebook)
     
     def create_regressor_raso_tab(self, parent_notebook):
@@ -1060,7 +982,6 @@ class AlzheimerApp:
         regressor_raso_tab = ttk.Frame(parent_notebook)
         parent_notebook.add(regressor_raso_tab, text="Regressor Raso")
         
-        # Frame principal
         main_frame_raso = ttk.Frame(regressor_raso_tab)
         main_frame_raso.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
@@ -1068,24 +989,21 @@ class AlzheimerApp:
                  font=("Arial", 14, "bold"), foreground="darkblue").pack(pady=10)
         
         ttk.Label(main_frame_raso, 
-                 text="Estime a idade do paciente usando descritores ventriculares (area, perimeter, etc.)",
+                 text="Estimativa de idade usando descritores ventriculares extraídos das imagens.",
                  wraplength=700).pack(pady=5)
         
-        # Informação
-        info_frame_raso = ttk.LabelFrame(main_frame_raso, text="ℹ️ Informações", padding="10")
+        info_frame_raso = ttk.LabelFrame(main_frame_raso, text="Informações", padding="10")
         info_frame_raso.pack(fill=tk.X, pady=10, padx=10)
         
         ttk.Label(info_frame_raso, 
-                 text="• Modelo: Linear Regression (sklearn) com StandardScaler\n"
-                      "• Entrada: Características calculadas no item 7 (descritores ventriculares)\n"
-                      "• Métricas: MAE, RMSE, R²\n"
-                      "• Gráfico: Predito vs Real\n"
-                      "• Análise: Verifica suficiência das características e monotonicidade da idade\n"
-                      "• NOTA: O método profundo (ResNet50) não foi aplicado nesta etapa",
+                 text="- Modelo: Regressão Linear (sklearn) com normalização\n"
+                      "- Entrada: descritores morfológicos dos ventrículos\n"
+                      "- Métricas: MAE, RMSE, R²\n"
+                      "- Gráfico: predições vs valores reais\n"
+                      "- Análise: suficiência dos descritores e monotonicidade da idade",
                  wraplength=700,
                  justify=tk.LEFT).pack(pady=5)
         
-        # Botões de execução
         ttk.Separator(main_frame_raso, orient='horizontal').pack(fill=tk.X, pady=20)
         ttk.Label(main_frame_raso, text="Executar:", 
                  font=("Arial", 11, "bold")).pack(pady=(10, 5))
@@ -1101,7 +1019,6 @@ class AlzheimerApp:
         )
         btn_train_shallow.pack(pady=5)
         
-        # Status
         self.lbl_status_raso = ttk.Label(
             main_frame_raso, 
             text="Aguardando...",
@@ -1109,7 +1026,6 @@ class AlzheimerApp:
         )
         self.lbl_status_raso.pack(pady=5)
         
-        # Área de resultados
         ttk.Separator(main_frame_raso, orient='horizontal').pack(fill=tk.X, pady=20)
         ttk.Label(main_frame_raso, text="Resultados:", 
                  font=("Arial", 11, "bold")).pack(pady=(10, 5))
@@ -1129,14 +1045,12 @@ class AlzheimerApp:
         self.text_results_raso.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar_results_raso.config(command=self.text_results_raso.yview)
         
-        self.text_results_raso.insert(tk.END, "Os resultados do regressor raso serão exibidos aqui...\n\n")
-        self.text_results_raso.insert(tk.END, "ℹ️ NOTA: Regressor Raso (Regressão Linear)\n")
-        self.text_results_raso.insert(tk.END, "   • Modelo: Linear Regression (sklearn) com Pipeline (StandardScaler)\n")
-        self.text_results_raso.insert(tk.END, "   • Entrada: Características calculadas no item 7 (descritores ventriculares)\n")
-        self.text_results_raso.insert(tk.END, "   • Target: coluna 'Age' do CSV\n")
-        self.text_results_raso.insert(tk.END, "   • Métricas: MAE, RMSE, R²\n")
-        self.text_results_raso.insert(tk.END, "   • Análise automática: Suficiência das características e monotonicidade da idade\n")
-        self.text_results_raso.insert(tk.END, "\n   NOTA: O método profundo (ResNet50) não foi aplicado nesta etapa.\n")
+        self.text_results_raso.insert(tk.END, "Os resultados serão exibidos aqui após o treinamento.\n\n")
+        self.text_results_raso.insert(tk.END, "Modelo: Regressão Linear com normalização dos dados\n")
+        self.text_results_raso.insert(tk.END, "Entrada: descritores morfológicos extraídos na Parte 7\n")
+        self.text_results_raso.insert(tk.END, "Target: coluna Age (idade no momento do exame)\n")
+        self.text_results_raso.insert(tk.END, "Métricas: MAE, RMSE, R²\n")
+        self.text_results_raso.insert(tk.END, "Análise automática: suficiência dos descritores e monotonicidade temporal da idade\n")
         self.text_results_raso.config(state=tk.DISABLED)
     
     def create_regressor_profundo_tab(self, parent_notebook):
@@ -1144,7 +1058,6 @@ class AlzheimerApp:
         regressor_profundo_tab = ttk.Frame(parent_notebook)
         parent_notebook.add(regressor_profundo_tab, text="Regressor Profundo")
         
-        # Frame principal
         main_frame_profundo = ttk.Frame(regressor_profundo_tab)
         main_frame_profundo.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
@@ -1152,28 +1065,25 @@ class AlzheimerApp:
                  font=("Arial", 14, "bold"), foreground="darkblue").pack(pady=10)
         
         ttk.Label(main_frame_profundo, 
-                 text="Estime a idade do paciente usando imagens NIfTI com ResNet50 (transfer learning)",
+                 text="Estimativa de idade usando imagens NIfTI com ResNet50 e transfer learning.",
                  wraplength=700).pack(pady=5)
         
-        # Informação
-        info_frame_profundo = ttk.LabelFrame(main_frame_profundo, text="ℹ️ Informações", padding="10")
+        info_frame_profundo = ttk.LabelFrame(main_frame_profundo, text="Informações", padding="10")
         info_frame_profundo.pack(fill=tk.X, pady=10, padx=10)
         
         ttk.Label(info_frame_profundo, 
-                 text="• Usa imagens NIfTI (slice axial central)\n"
-                      "• Modelo: ResNet50 com transfer learning (ImageNet)\n"
-                      "• Treino em 2 estágios: backbone congelado → fine-tuning (últimas 20 camadas)\n"
-                      "• Métricas: MAE, RMSE, R²\n"
-                      "• Gráficos: Predito vs Real, Curva de Aprendizado",
+                 text="- Entrada: imagens NIfTI (slice axial central)\n"
+                      "- Modelo: ResNet50 (transfer learning ImageNet)\n"
+                      "- Treino em 2 estágios: head + fine-tuning (últimas 20 camadas)\n"
+                      "- Métricas: MAE, RMSE, R²\n"
+                      "- Saídas: gráficos de predição e curva de aprendizado",
                  wraplength=700,
                  justify=tk.LEFT).pack(pady=5)
         
-        # Seção de configuração
         ttk.Separator(main_frame_profundo, orient='horizontal').pack(fill=tk.X, pady=20)
         ttk.Label(main_frame_profundo, text="Configurações:", 
                  font=("Arial", 11, "bold")).pack(pady=(10, 5))
         
-        # Pasta de imagens
         config_frame_profundo = ttk.Frame(main_frame_profundo)
         config_frame_profundo.pack(fill=tk.X, pady=5)
         
@@ -1186,7 +1096,6 @@ class AlzheimerApp:
                                       command=self.browse_image_dir_parte11)
         btn_browse_images_p11.pack(side=tk.LEFT, padx=5)
         
-        # Botões de execução
         ttk.Separator(main_frame_profundo, orient='horizontal').pack(fill=tk.X, pady=20)
         ttk.Label(main_frame_profundo, text="Executar:", 
                  font=("Arial", 11, "bold")).pack(pady=(10, 5))
@@ -1202,7 +1111,6 @@ class AlzheimerApp:
         )
         btn_train_deep.pack(pady=5)
         
-        # Status
         self.lbl_status_profundo = ttk.Label(
             main_frame_profundo, 
             text="Aguardando...",
@@ -1210,7 +1118,6 @@ class AlzheimerApp:
         )
         self.lbl_status_profundo.pack(pady=5)
         
-        # Área de resultados
         ttk.Separator(main_frame_profundo, orient='horizontal').pack(fill=tk.X, pady=20)
         ttk.Label(main_frame_profundo, text="Resultados:", 
                  font=("Arial", 11, "bold")).pack(pady=(10, 5))
@@ -1230,11 +1137,11 @@ class AlzheimerApp:
         self.text_results_profundo.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar_results_profundo.config(command=self.text_results_profundo.yview)
         
-        self.text_results_profundo.insert(tk.END, "Os resultados do regressor profundo serão exibidos aqui...\n\n")
-        self.text_results_profundo.insert(tk.END, "ℹ️ NOTA: O ResNet50 usa transfer learning do ImageNet com fine-tuning.\n")
-        self.text_results_profundo.insert(tk.END, "   Formatos suportados: .png, .jpg, .jpeg, .nii, .nii.gz\n")
-        self.text_results_profundo.insert(tk.END, "   Para imagens NIfTI (.nii): extrai slice axial central automaticamente.\n")
-        self.text_results_profundo.insert(tk.END, "   Certifique-se de que a pasta de imagens está configurada corretamente.\n")
+        self.text_results_profundo.insert(tk.END, "Os resultados serão exibidos aqui após o treinamento.\n\n")
+        self.text_results_profundo.insert(tk.END, "O modelo utiliza transfer learning (ImageNet) com fine-tuning.\n")
+        self.text_results_profundo.insert(tk.END, "Formatos aceitos: PNG, JPG, JPEG, NIfTI (.nii, .nii.gz)\n")
+        self.text_results_profundo.insert(tk.END, "Para imagens 3D, o slice axial central é extraído automaticamente.\n")
+        self.text_results_profundo.insert(tk.END, "Verifique se o caminho da pasta de imagens está correto antes de iniciar.\n")
         self.text_results_profundo.config(state=tk.DISABLED)
     
     def browse_image_dir_parte11(self):
@@ -1247,46 +1154,110 @@ class AlzheimerApp:
             self.entry_image_dir_p11.delete(0, tk.END)
             self.entry_image_dir_p11.insert(0, folder)
     
+    def create_parte12_tab(self):
+        """Cria a aba Parte 12 - Comparação de Resultados"""
+        parte12_tab = ttk.Frame(self.notebook)
+        self.notebook.add(parte12_tab, text="Parte 12 - Comparação de Resultados")
+        
+        main_frame_p12 = ttk.Frame(parte12_tab)
+        main_frame_p12.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        ttk.Label(main_frame_p12, text="Parte 12 - Comparação entre Regressores", 
+                 font=("Arial", 14, "bold"), foreground="darkblue").pack(pady=10)
+        
+        ttk.Label(main_frame_p12, 
+                 text="Compare os resultados obtidos entre o regressor raso e profundo.\n"
+                      "Execute ambos os treinamentos na Parte 11 antes de gerar a comparação.",
+                 wraplength=700).pack(pady=5)
+        
+        ttk.Separator(main_frame_p12, orient='horizontal').pack(fill=tk.X, pady=20)
+        
+        btn_gerar_comparacao = ttk.Button(
+            main_frame_p12, 
+            text="Gerar Comparação", 
+            command=self.gerar_comparacao_resultados,
+            width=30
+        )
+        btn_gerar_comparacao.pack(pady=10)
+        
+        self.lbl_status_p12 = ttk.Label(
+            main_frame_p12, 
+            text="Aguardando treinamento dos modelos...",
+            foreground="gray"
+        )
+        self.lbl_status_p12.pack(pady=5)
+        
+        ttk.Separator(main_frame_p12, orient='horizontal').pack(fill=tk.X, pady=20)
+        ttk.Label(main_frame_p12, text="Comparação:", 
+                 font=("Arial", 11, "bold")).pack(pady=(10, 5))
+        
+        results_frame_p12 = ttk.Frame(main_frame_p12)
+        results_frame_p12.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        scrollbar_results_p12 = ttk.Scrollbar(results_frame_p12)
+        scrollbar_results_p12.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.text_results_p12 = tk.Text(
+            results_frame_p12, 
+            yscrollcommand=scrollbar_results_p12.set,
+            wrap=tk.WORD,
+            height=25,
+            font=("Courier", 10)
+        )
+        self.text_results_p12.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_results_p12.config(command=self.text_results_p12.yview)
+        
+        self.text_results_p12.insert(tk.END, "Aguardando geração da comparação...\n\n")
+        self.text_results_p12.insert(tk.END, "Para gerar a comparação:\n")
+        self.text_results_p12.insert(tk.END, "1. Vá para a Parte 11\n")
+        self.text_results_p12.insert(tk.END, "2. Treine o Regressor Raso\n")
+        self.text_results_p12.insert(tk.END, "3. Treine o Regressor Profundo\n")
+        self.text_results_p12.insert(tk.END, "4. Volte aqui e clique em 'Gerar Comparação'\n")
+        self.text_results_p12.config(state=tk.DISABLED)
+    
     def train_shallow_regressor_p11(self):
         """Treina o regressor raso (tabular)"""
         import sys
         import io
         
-        # Verificar se os CSVs existem
         required_files = ["train_split.csv", "val_split.csv", "test_split.csv"]
         missing = [f for f in required_files if not os.path.exists(f)]
         if missing:
-            messagebox.showerror("Erro", f"Arquivos não encontrados: {missing}\n\nExecute a Parte 9 primeiro!")
+            messagebox.showerror("Erro", f"Arquivos não encontrados: {missing}\n\nExecute a Parte 9 primeiro para gerar os splits.")
             return
         
         self.lbl_status_raso.config(
-            text="Treinando Regressor Raso...", 
+            text="Treinando modelo...", 
             foreground="blue"
         )
         self.root.update()
         
-        # Redirecionar stdout
         old_stdout = sys.stdout
         sys.stdout = buffer = io.StringIO()
         
         try:
             result = self.train_shallow_regressor_internal()
             
+            if result and len(result) == 4:
+                _, test_mae, test_rmse, test_r2 = result
+                self.metrics_raso['mae'] = test_mae
+                self.metrics_raso['rmse'] = test_rmse
+                self.metrics_raso['r2'] = test_r2
+            
             output = buffer.getvalue()
             sys.stdout = old_stdout
             
-            # Exibir resultados
             self.text_results_raso.config(state=tk.NORMAL)
             self.text_results_raso.insert(tk.END, output)
             self.text_results_raso.see(tk.END)
             self.text_results_raso.config(state=tk.DISABLED)
             
-            self.lbl_status_raso.config(text="✓ Regressor Raso treinado com sucesso!", foreground="green")
-            messagebox.showinfo("Sucesso", "Regressor Raso treinado!\n\nVerifique os arquivos gerados:\n- pred_vs_real_raso.png")
+            self.lbl_status_raso.config(text="Treinamento concluído com sucesso.", foreground="green")
+            messagebox.showinfo("Sucesso", "Regressor raso treinado com sucesso.\n\nArquivo gerado: pred_vs_real_raso.png")
             
         except Exception as e:
             sys.stdout = old_stdout
-            error_msg = f"Erro ao treinar Regressor Raso:\n{str(e)}"
+            error_msg = f"Erro durante o treinamento:\n{str(e)}"
             self.text_results_raso.config(state=tk.NORMAL)
             self.text_results_raso.insert(tk.END, f"\n{error_msg}\n")
             self.text_results_raso.see(tk.END)
@@ -1301,7 +1272,6 @@ class AlzheimerApp:
         import sys
         import io
         
-        # Verificar se os CSVs existem
         required_files = ["train_split.csv", "val_split.csv", "test_split.csv"]
         missing = [f for f in required_files if not os.path.exists(f)]
         if missing:
@@ -1317,28 +1287,32 @@ class AlzheimerApp:
         )
         self.root.update()
         
-        # Redirecionar stdout
         old_stdout = sys.stdout
         sys.stdout = buffer = io.StringIO()
         
         try:
             result = self.train_deep_regressor_internal(base_image_dir=image_dir)
             
+            if result and len(result) == 4:
+                _, test_mae, test_rmse, test_r2 = result
+                self.metrics_profundo['mae'] = test_mae
+                self.metrics_profundo['rmse'] = test_rmse
+                self.metrics_profundo['r2'] = test_r2
+            
             output = buffer.getvalue()
             sys.stdout = old_stdout
             
-            # Exibir resultados
             self.text_results_profundo.config(state=tk.NORMAL)
             self.text_results_profundo.insert(tk.END, output)
             self.text_results_profundo.see(tk.END)
             self.text_results_profundo.config(state=tk.DISABLED)
             
-            self.lbl_status_profundo.config(text="✓ Regressor Profundo treinado com sucesso!", foreground="green")
-            messagebox.showinfo("Sucesso", "Regressor Profundo treinado!\n\nVerifique os arquivos gerados:\n- learning_curve_regressor_profundo.png\n- pred_vs_real_profundo.png")
+            self.lbl_status_profundo.config(text="Treinamento concluído com sucesso.", foreground="green")
+            messagebox.showinfo("Sucesso", "Regressor profundo treinado com sucesso.\n\nArquivos gerados:\n- learning_curve_regressor_profundo.png\n- pred_vs_real_profundo.png")
             
         except Exception as e:
             sys.stdout = old_stdout
-            error_msg = f"Erro ao treinar Regressor Profundo:\n{str(e)}"
+            error_msg = f"Erro durante o treinamento:\n{str(e)}"
             self.text_results_profundo.config(state=tk.NORMAL)
             self.text_results_profundo.insert(tk.END, f"\n{error_msg}\n")
             self.text_results_profundo.see(tk.END)
@@ -1348,45 +1322,198 @@ class AlzheimerApp:
             import traceback
             traceback.print_exc()
     
-    def train_both_regressors_p11(self):
-        """Treina ambos os regressores"""
-        self.train_shallow_regressor_p11()
-        self.root.after(2000, self.train_deep_regressor_p11)
+    def gerar_comparacao_resultados(self):
+        """Gera a comparação entre regressores raso e profundo"""
+        mae_raso = self.metrics_raso.get('mae')
+        rmse_raso = self.metrics_raso.get('rmse')
+        r2_raso = self.metrics_raso.get('r2')
+        
+        mae_prof = self.metrics_profundo.get('mae')
+        rmse_prof = self.metrics_profundo.get('rmse')
+        r2_prof = self.metrics_profundo.get('r2')
+        
+        if mae_raso is None or mae_prof is None:
+            messagebox.showwarning(
+                "Aviso", 
+                "Execute o treinamento de ambos os regressores na Parte 11 antes de gerar a comparação."
+            )
+            return
+        
+        texto = self.gerar_texto_resultados(mae_raso, rmse_raso, r2_raso, mae_prof, rmse_prof, r2_prof)
+        
+        self.text_results_p12.config(state=tk.NORMAL)
+        self.text_results_p12.delete(1.0, tk.END)
+        self.text_results_p12.insert(tk.END, texto)
+        self.text_results_p12.config(state=tk.DISABLED)
+        
+        self.lbl_status_p12.config(text="Comparação gerada com sucesso!", foreground="green")
+    
+    def gerar_texto_resultados(self, mae_raso, rmse_raso, r2_raso, mae_prof, rmse_prof, r2_prof):
+        """Gera o texto de comparação entre os regressores"""
+        texto = "="*80 + "\n"
+        texto += "PARTE 12 - COMPARAÇÃO ENTRE AS SOLUÇÕES DE REGRESSÃO DE IDADE\n"
+        texto += "="*80 + "\n\n"
+        
+        texto += "EXPLICAÇÃO DAS MÉTRICAS\n"
+        texto += "-"*80 + "\n\n"
+        
+        texto += "• MAE (Mean Absolute Error - Erro Médio Absoluto):\n"
+        texto += "  Representa o erro médio em anos entre a idade predita e a real.\n"
+        texto += "  Quanto MENOR o valor, MELHOR é o modelo.\n"
+        texto += "  Interpretação direta: 'o modelo erra em média X anos'.\n\n"
+        
+        texto += "• RMSE (Root Mean Squared Error - Raiz do Erro Quadrático Médio):\n"
+        texto += "  Similar ao MAE, mas penaliza mais os erros grandes.\n"
+        texto += "  Quanto MENOR o valor, MELHOR é o modelo.\n"
+        texto += "  Se RMSE >> MAE, indica presença de outliers ou erros muito grandes.\n\n"
+        
+        texto += "• R² (Coeficiente de Determinação):\n"
+        texto += "  Mede quanto da variação da idade é explicada pelo modelo.\n"
+        texto += "  R² = 1.0  → modelo perfeito (explica 100% da variação)\n"
+        texto += "  R² = 0.0  → modelo não melhor que predizer sempre a média\n"
+        texto += "  R² < 0.0  → modelo pior que predizer sempre a média\n"
+        texto += "  Quanto MAIS PRÓXIMO de 1.0, MELHOR é o modelo.\n\n"
+        
+        texto += "="*80 + "\n"
+        texto += "RESULTADOS OBTIDOS\n"
+        texto += "="*80 + "\n\n"
+        
+        texto += "REGRESSOR RASO (Regressão Linear):\n"
+        texto += f"  • MAE:  {mae_raso:.2f} anos\n"
+        texto += f"  • RMSE: {rmse_raso:.2f} anos\n"
+        texto += f"  • R²:   {r2_raso:.4f}\n\n"
+        
+        texto += "REGRESSOR PROFUNDO (ResNet50):\n"
+        texto += f"  • MAE:  {mae_prof:.2f} anos\n"
+        texto += f"  • RMSE: {rmse_prof:.2f} anos\n"
+        texto += f"  • R²:   {r2_prof:.4f}\n\n"
+        
+        texto += "="*80 + "\n"
+        texto += "ANÁLISE COMPARATIVA\n"
+        texto += "="*80 + "\n\n"
+        
+        if mae_raso < mae_prof:
+            melhor = "Regressor RASO"
+            diff_mae = mae_prof - mae_raso
+            texto += f"→ O {melhor} obteve MELHOR desempenho em MAE.\n"
+            texto += f"  Diferença: {diff_mae:.2f} anos a menos de erro médio.\n\n"
+        elif mae_prof < mae_raso:
+            melhor = "Regressor PROFUNDO"
+            diff_mae = mae_raso - mae_prof
+            texto += f"→ O {melhor} obteve MELHOR desempenho em MAE.\n"
+            texto += f"  Diferença: {diff_mae:.2f} anos a menos de erro médio.\n\n"
+        else:
+            texto += "→ Ambos os modelos obtiveram desempenho IDÊNTICO em MAE.\n\n"
+        
+        if rmse_raso < rmse_prof:
+            melhor_rmse = "Regressor RASO"
+        elif rmse_prof < rmse_raso:
+            melhor_rmse = "Regressor PROFUNDO"
+        else:
+            melhor_rmse = "Empate"
+        
+        if melhor_rmse != "Empate":
+            texto += f"→ O {melhor_rmse} também foi melhor em RMSE.\n"
+        
+        if r2_raso > r2_prof:
+            texto += f"→ O Regressor RASO explica melhor a variação da idade (R² maior).\n\n"
+        elif r2_prof > r2_raso:
+            texto += f"→ O Regressor PROFUNDO explica melhor a variação da idade (R² maior).\n\n"
+        else:
+            texto += f"→ Ambos explicam igualmente a variação da idade.\n\n"
+        
+        texto += "LIMITAÇÕES E CONSIDERAÇÕES:\n"
+        texto += "-"*80 + "\n\n"
+        
+        texto += "1. TAMANHO DO DATASET:\n"
+        texto += "   O dataset OASIS-2 possui aproximadamente 360 exames. Este é um conjunto\n"
+        texto += "   relativamente pequeno, especialmente para o regressor profundo (ResNet50),\n"
+        texto += "   que idealmente se beneficia de milhares ou dezenas de milhares de imagens.\n\n"
+        
+        texto += "2. REGRESSOR RASO (Linear Regression):\n"
+        texto += "   • Entrada: apenas descritores morfológicos dos ventrículos (área, perímetro,\n"
+        texto += "     excentricidade, solidez, extensão).\n"
+        texto += "   • Esses descritores podem NÃO capturar toda a variação da idade.\n"
+        texto += "   • A idade está relacionada a múltiplos fatores estruturais do cérebro\n"
+        texto += "     (atrofia cortical, volume de substância branca/cinzenta, sulcos, etc.),\n"
+        texto += "     e não apenas aos ventrículos.\n"
+        texto += "   • Vantagem: modelo simples, interpretável e rápido.\n\n"
+        
+        texto += "3. REGRESSOR PROFUNDO (ResNet50):\n"
+        texto += "   • Utiliza transfer learning de pesos treinados no ImageNet (fotos naturais).\n"
+        texto += "   • Grande diferença de domínio: ImageNet contém imagens RGB coloridas\n"
+        texto += "     (animais, objetos, cenas), enquanto MRI são imagens médicas em tons de\n"
+        texto += "     cinza de estruturas cerebrais.\n"
+        texto += "   • O modelo usa apenas 1 slice axial central 2D, perdendo informação 3D\n"
+        texto += "     importante presente no volume completo.\n"
+        texto += "   • Dataset pequeno pode causar overfitting mesmo com fine-tuning controlado.\n"
+        texto += "   • Vantagem: potencial para aprender padrões visuais complexos que descritores\n"
+        texto += "     manuais não capturam.\n\n"
+        
+        texto += "4. RECOMENDAÇÕES PARA MELHORIAS FUTURAS:\n"
+        texto += "   • Aumentar o tamanho do dataset (mais exames/pacientes).\n"
+        texto += "   • Para o raso: adicionar mais features relevantes (volumes regionais,\n"
+        texto += "     medidas de atrofia, textura, etc.).\n"
+        texto += "   • Para o profundo: usar arquiteturas 3D (ResNet3D, DenseNet3D) para\n"
+        texto += "     aproveitar o volume completo.\n"
+        texto += "   • Considerar modelos pré-treinados em domínio médico (MedicalNet, etc.).\n"
+        texto += "   • Combinar ambas abordagens em um ensemble (híbrido raso + profundo).\n\n"
+        
+        texto += "="*80 + "\n"
+        texto += "CONCLUSÃO\n"
+        texto += "="*80 + "\n\n"
+        
+        if mae_raso < 10 and mae_prof < 10:
+            texto += "Ambos os modelos apresentaram bom desempenho (MAE < 10 anos), considerando\n"
+            texto += "as limitações do dataset. "
+        elif mae_raso < 15 or mae_prof < 15:
+            texto += "Os modelos apresentaram desempenho aceitável (MAE < 15 anos), mas há espaço\n"
+            texto += "para melhorias. "
+        else:
+            texto += "Os modelos apresentaram desempenho limitado (MAE > 15 anos), indicando que\n"
+            texto += "as features atuais e/ou o tamanho do dataset são insuficientes. "
+        
+        if abs(mae_raso - mae_prof) < 2:
+            texto += "Os resultados são muito similares entre as abordagens\n"
+            texto += "rasa e profunda, sugerindo que ambas capturam informações comparáveis com\n"
+            texto += "os dados disponíveis.\n"
+        else:
+            texto += f"O {melhor} demonstrou vantagem clara neste experimento.\n"
+        
+        texto += "\n" + "="*80 + "\n"
+        
+        return texto
 
     def log(self, message):
-        """ Adiciona uma mensagem ao log na GUI. """
+        """Adiciona mensagem ao log da interface."""
         self.log_text.config(state=tk.NORMAL)
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.DISABLED)
 
     def create_menu(self):
-        """ Cria a barra de menu superior. """
+        """Cria a barra de menu superior."""
         menu_bar = tk.Menu(self.root)
         self.root.config(menu=menu_bar)
 
-        # Menu Arquivo
         file_menu = tk.Menu(menu_bar, tearoff=0)
         menu_bar.add_cascade(label="Arquivo", menu=file_menu)
         file_menu.add_command(label="Carregar CSV", command=self.load_csv)
         file_menu.add_command(label="Carregar Imagem...", command=self.load_image)
         file_menu.add_separator()
-        file_menu.add_command(label="🔄 Fazer Merge de CSVs", command=self.merge_csv_files)
+        file_menu.add_command(label="Fazer Merge de CSVs", command=self.merge_csv_files)
         file_menu.add_separator()
         file_menu.add_command(label="Sair", command=self.root.quit)
 
-        # Menu Acessibilidade [cite: 75]
         help_menu = tk.Menu(menu_bar, tearoff=0)
         menu_bar.add_cascade(label="Acessibilidade", menu=help_menu)
         help_menu.add_command(label="Aumentar Fonte", command=self.increase_font)
         help_menu.add_command(label="Diminuir Fonte", command=self.decrease_font)
 
     def update_font_size(self):
-        """ Atualiza o tamanho da fonte de todos os widgets. """
+        """Atualiza o tamanho da fonte dos widgets."""
         self.default_font.configure(size=self.current_font_size)
-        # Você pode precisar iterar sobre widgets específicos se eles não atualizarem
         self.lbl_csv_status.config(font=self.default_font)
-        # ... adicionar outros widgets ...
 
     def increase_font(self):
         self.current_font_size += 2
@@ -1405,87 +1532,77 @@ class AlzheimerApp:
         if self.original_image is None:
             return
         
-        # Converte coordenadas do canvas para coordenadas da imagem
         canvas_w = self.canvas_original.winfo_width()
         canvas_h = self.canvas_original.winfo_height()
         
         img_w = self.original_image.width
         img_h = self.original_image.height
         
-        # Calcula o tamanho da imagem exibida considerando o zoom
         display_w = int(img_w * self.zoom_level_original)
         display_h = int(img_h * self.zoom_level_original)
         
-        # Ajuste: centralização no canvas
         offset_x = (canvas_w - display_w) / 2
         offset_y = (canvas_h - display_h) / 2
         
-        # Converte para coordenadas da imagem original
         img_x = int((event.x - offset_x) / self.zoom_level_original)
         img_y = int((event.y - offset_y) / self.zoom_level_original)
         
-        # Verifica se está dentro da imagem
         if 0 <= img_x < img_w and 0 <= img_y < img_h:
             self.current_mouse_x = img_x
             self.current_mouse_y = img_y
-            self.lbl_mouse_coords.config(text=f"🖱️ Mouse: X: {img_x:3d} | Y: {img_y:3d}")
+            self.lbl_mouse_coords.config(text=f"Mouse: X: {img_x:3d} | Y: {img_y:3d}")
         else:
-            self.lbl_mouse_coords.config(text="🖱️ Mouse: X: -- | Y: --")
+            self.lbl_mouse_coords.config(text=" Mouse: X: -- | Y: --")
 
     def track_mouse_position_preprocessed(self, event):
         """Rastreia a posição do mouse na imagem pré-processada."""
         if self.preprocessed_image is None:
             return
         
-        # Converte coordenadas do canvas para coordenadas da imagem
         canvas_w = self.canvas_preprocessed.winfo_width()
         canvas_h = self.canvas_preprocessed.winfo_height()
         
         img_w = self.preprocessed_image.width
         img_h = self.preprocessed_image.height
         
-        # Calcula o tamanho da imagem exibida considerando o zoom
         display_w = int(img_w * self.zoom_level_preprocessed)
         display_h = int(img_h * self.zoom_level_preprocessed)
         
-        # Ajuste: centralização no canvas
         offset_x = (canvas_w - display_w) / 2
         offset_y = (canvas_h - display_h) / 2
         
-        # Converte para coordenadas da imagem
         img_x = int((event.x - offset_x) / self.zoom_level_preprocessed)
         img_y = int((event.y - offset_y) / self.zoom_level_preprocessed)
         
-        # Verifica se está dentro da imagem
         if 0 <= img_x < img_w and 0 <= img_y < img_h:
-            self.lbl_mouse_coords.config(text=f"🖱️ Mouse: X: {img_x:3d} | Y: {img_y:3d} [PRÉ-PROC]")
+            self.lbl_mouse_coords.config(text=f"Mouse: X: {img_x:3d} | Y: {img_y:3d} [PRÉ-PROC]")
         else:
-            self.lbl_mouse_coords.config(text="🖱️ Mouse: X: -- | Y: --")
+            self.lbl_mouse_coords.config(text=" Mouse: X: -- | Y: --")
 
     def clear_registered_points(self):
         """Limpa a lista de pontos registrados."""
         self.registered_points = []
         self.lbl_clicked_coords.config(text="Nenhum ponto registrado")
-        self.log("📍 Pontos registrados limpos.")
+        self.log("Pontos registrados limpos.")
 
     def export_registered_points(self):
         """Exporta os pontos registrados em formato Python para o log."""
         if not self.registered_points:
-            self.log("⚠ Nenhum ponto registrado para exportar.")
+            self.log("Nenhum ponto registrado para exportar.")
             return
         
         self.log("\n" + "="*50)
-        self.log("📍 PONTOS REGISTRADOS (formato Python):")
+        self.log("PONTOS REGISTRADOS (formato Python):")
         self.log("="*50)
-        self.log(f"# Total de pontos: {len(self.registered_points)}")
+        self.log(f"Total: {len(self.registered_points)} pontos")
         self.log(f"seed_points = [")
         for i, (x, y) in enumerate(self.registered_points):
-            self.log(f"    ({x}, {y}),  # Ponto {i+1}")
+            self.log(f"    ({x}, {y}),")
         self.log("]")
         self.log("="*50 + "\n")
         
-        messagebox.showinfo("Pontos Exportados", 
-                           f"{len(self.registered_points)} pontos exportados para o log!\n\n"
+        messagebox.showinfo("Sucesso", 
+                           f"{len(self.registered_points)} pontos exportados para o log.\n\n"
                            "Copie do log para usar na segmentação automática.")
 
     def start_multi_seed(self):
@@ -1497,8 +1614,8 @@ class AlzheimerApp:
         self.multi_seed_mode = True
         self.multi_seed_points = []
         self.accumulated_mask = None
-        self.lbl_multi_seed.config(text="🎯 Multi-Seed ATIVO - Clique nos ventrículos", foreground="purple")
-        self.log("🎯 Modo Multi-Seed ativado. Clique em múltiplos pontos dos ventrículos.")
+        self.lbl_multi_seed.config(text="Multi-Seed ATIVO - Clique nos ventrículos", foreground="purple")
+        self.log("Modo Multi-Seed ativado. Clique em múltiplos pontos dos ventrículos.")
 
     def finish_multi_seed(self):
         """Finaliza o modo multi-seed e executa segmentação com os pontos coletados."""
@@ -1513,44 +1630,37 @@ class AlzheimerApp:
             return
         
         self.multi_seed_mode = False
-        self.lbl_multi_seed.config(text=f"✓ Multi-Seed finalizado: {len(self.multi_seed_points)} pontos", 
+        self.lbl_multi_seed.config(text=f"Multi-Seed finalizado: {len(self.multi_seed_points)} pontos", 
                                    foreground="green")
         
-        # A máscara já foi acumulada durante os cliques
-        self.log(f"✓ Modo Multi-Seed finalizado com {len(self.multi_seed_points)} pontos.")
+        self.log(f"Modo Multi-Seed concluído com {len(self.multi_seed_points)} pontos.")
         
-        # Atualiza status
         if self.accumulated_mask is not None:
             num_pixels = np.sum(self.accumulated_mask == 255)
             self.lbl_segment_status.config(
-                text=f"✓ Multi-Seed: {len(self.multi_seed_points)} seeds | {num_pixels} pixels",
+                text=f"Multi-Seed: {len(self.multi_seed_points)} seeds | {num_pixels} pixels",
                 foreground="green"
             )
 
     def export_multi_seed_points(self):
         """Exporta os pontos coletados no modo Multi-Seed."""
         if not self.multi_seed_points:
-            self.log("⚠ Nenhum ponto Multi-Seed para exportar.")
+            self.log("Nenhum ponto Multi-Seed para exportar.")
             messagebox.showwarning("Aviso", "Nenhum ponto Multi-Seed coletado.")
             return
         
-        self.log("\n" + "="*60)
-        self.log("🎯 PONTOS MULTI-SEED (formato Python):")
-        self.log("="*60)
-        self.log(f"# Total de pontos: {len(self.multi_seed_points)}")
-        self.log(f"auto_seed_points = [")
+        self.log("")
+        self.log("Relatório de pontos Multi-Seed (formato Python)")
+        self.log(f"Total de pontos: {len(self.multi_seed_points)}")
+        self.log("auto_seed_points = [")
         for i, (x, y) in enumerate(self.multi_seed_points):
-            self.log(f"    ({x}, {y}),  # Ponto {i+1}")
+            self.log(f"    ({x}, {y}),")
         self.log("]")
-        self.log("="*60 + "\n")
+        self.log("Fim do relatório de pontos Multi-Seed.\n")
         
-        messagebox.showinfo("Pontos Multi-Seed Exportados", 
-                           f"{len(self.multi_seed_points)} pontos exportados para o log!\n\n"
-                           "Copie do log e cole em self.auto_seed_points no código.")
-
-    # --- 3. FUNÇÕES DE CARREGAMENTO E EXIBIÇÃO ---
-    
-    # --- PARTE 8: SCATTERPLOTS ---
+        messagebox.showinfo("Sucesso", 
+                           f"{len(self.multi_seed_points)} pontos exportados para o log.\n\n"
+                           "Copie do log para usar no código.")
     
     def select_csv_parte8(self):
         """Seleciona arquivo CSV para Parte 8"""
@@ -1588,14 +1698,11 @@ class AlzheimerApp:
             self.lbl_scatterplot_gen_status.config(text="Gerando scatterplots...", foreground="blue")
             self.root.update()
             
-            # Ler CSV
             df = pd.read_csv(self.csv_path_parte8, sep=";", decimal=",")
             
-            # Criar diretório de saída (se não existir)
             if not os.path.exists(self.scatterplots_dir):
                 os.makedirs(self.scatterplots_dir, exist_ok=True)
             
-            # Definir características ventriculares
             descriptor_cols = [
                 'area', 'perimeter', 'circularity', 'eccentricity', 
                 'solidity', 'extent', 'aspect_ratio'
@@ -1607,25 +1714,21 @@ class AlzheimerApp:
                 messagebox.showerror("Erro", "Menos de 2 características ventriculares encontradas!")
                 return
             
-            # Converter valores para numérico
             for col in available_cols:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
             
-            # Normalizar coluna Group: padronizar todas as variações de "Nondemented" para "NonDemented"
             df['Group'] = df['Group'].str.strip()
             df['Group'] = df['Group'].str.replace('Nondemented', 'NonDemented', case=False, regex=False)
             df['Group'] = df['Group'].str.replace('non-demented', 'NonDemented', case=False, regex=False)
             df['Group'] = df['Group'].str.replace('non demented', 'NonDemented', case=False, regex=False)
             df['Group_normalized'] = df['Group']
             
-            # Mapear cores (apenas uma entrada para NonDemented)
             color_map = {
                 'Converted': 'black',
                 'NonDemented': 'blue',
                 'Demented': 'red'
             }
             
-            # Gerar pares
             import itertools
             pairs = list(itertools.combinations(available_cols, 2))
             self.scatterplot_files = []
@@ -1637,11 +1740,9 @@ class AlzheimerApp:
                 if len(df_valid) == 0:
                     continue
                 
-                # Criar figura
                 fig = Figure(figsize=(8, 6))
                 ax = fig.add_subplot(111)
                 
-                # Plotar por grupo (usar comparação exata para evitar duplicação)
                 for group_name, color in color_map.items():
                     group_data = df_valid[df_valid['Group_normalized'] == group_name]
                     if len(group_data) > 0:
@@ -1661,7 +1762,6 @@ class AlzheimerApp:
                 ax.legend(loc='best')
                 ax.grid(True, alpha=0.3)
                 
-                # Salvar
                 filename = f"{feat_i}_vs_{feat_j}.png"
                 filepath = os.path.join(self.scatterplots_dir, filename)
                 fig.savefig(filepath, dpi=150, bbox_inches='tight')
@@ -1669,7 +1769,6 @@ class AlzheimerApp:
                 
                 self.scatterplot_files.append((filepath, feat_i, feat_j))
             
-            # Atualizar interface
             self.listbox_scatterplots.delete(0, tk.END)
             for filepath, feat_i, feat_j in self.scatterplot_files:
                 self.listbox_scatterplots.insert(tk.END, f"{feat_i}_vs_{feat_j}")
@@ -1681,7 +1780,7 @@ class AlzheimerApp:
                 self.btn_next_scatter.config(state=tk.NORMAL)
             
             self.lbl_scatterplot_gen_status.config(
-                text=f"✓ {len(self.scatterplot_files)} gráficos gerados!",
+                text=f"{len(self.scatterplot_files)} gráficos gerados com sucesso.",
                 foreground="green"
             )
             messagebox.showinfo("Sucesso", f"{len(self.scatterplot_files)} scatterplots gerados com sucesso!")
@@ -1705,7 +1804,6 @@ class AlzheimerApp:
             self.current_scatterplot_index = index
             filepath, feat_i, feat_j = self.scatterplot_files[index]
             
-            # Limpar canvas anterior de forma segura
             try:
                 for widget in list(self.scatterplot_canvas_frame.winfo_children()):
                     try:
@@ -1715,14 +1813,13 @@ class AlzheimerApp:
             except:
                 pass
             
-            # Carregar e exibir imagem
             try:
                 img = Image.open(filepath)
                 img.thumbnail((800, 600), Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(img)
                 
                 label = ttk.Label(self.scatterplot_canvas_frame, image=photo)
-                label.image = photo  # Manter referência
+                label.image = photo
                 label.pack(expand=True)
             except Exception as img_error:
                 error_label = ttk.Label(
@@ -1733,7 +1830,6 @@ class AlzheimerApp:
                 )
                 error_label.pack(expand=True)
             
-            # Atualizar informações de forma segura
             try:
                 if hasattr(self, 'lbl_scatterplot_info'):
                     try:
@@ -1753,13 +1849,11 @@ class AlzheimerApp:
                                 foreground="black"
                             )
                     except tk.TclError:
-                        # Widget foi destruído, recriar se necessário
                         pass
             except:
                 pass
                 
         except Exception as e:
-            # Se houver erro geral, tentar mostrar na área de visualização
             try:
                 error_label = ttk.Label(
                     self.scatterplot_canvas_frame, 
@@ -1802,7 +1896,6 @@ class AlzheimerApp:
                 text=f"Arquivo: {os.path.basename(filename)}",
                 foreground="green"
             )
-            # Carregar DataFrame
             try:
                 self.split_dataframe = pd.read_csv(filename, sep=";", decimal=",")
                 self.text_results_p9.config(state=tk.NORMAL)
@@ -1825,11 +1918,9 @@ class AlzheimerApp:
             
             df_work = self.split_dataframe.copy()
             
-            # Converter CDR para numérico
             df_work['CDR'] = pd.to_numeric(df_work['CDR'], errors='coerce')
             df_work['Group'] = df_work['Group'].str.strip()
             
-            # Reclassificar Converted
             converted_mask = df_work['Group'].str.contains('Converted', case=False, na=False)
             converted_cdr0 = converted_mask & (df_work['CDR'] == 0)
             df_work.loc[converted_cdr0, 'Group'] = 'Nondemented'
@@ -1838,7 +1929,6 @@ class AlzheimerApp:
             
             df_work['Group'] = df_work['Group'].str.strip()
             
-            # Criar coluna binária
             def classify_binary(group_str):
                 group_lower = str(group_str).lower()
                 if 'demented' in group_lower and 'non' not in group_lower:
@@ -1849,13 +1939,10 @@ class AlzheimerApp:
                     return None
             
             df_work['ClassBinary'] = df_work['Group'].apply(classify_binary)
-            
-            # Normalizar ClassBinary: padronizar todas as variações de "Nondemented" para "NonDemented"
             df_work = self.normalize_classbinary_column(df_work)
             
             df_bin = df_work[df_work['ClassBinary'].isin(['Demented', 'NonDemented'])].copy()
             
-            # Definir classe por paciente
             def get_patient_class(class_series):
                 if 'Demented' in class_series.values:
                     return 'Demented'
@@ -1865,7 +1952,6 @@ class AlzheimerApp:
             patient_labels = df_bin.groupby('Subject ID')['ClassBinary'].apply(get_patient_class).reset_index()
             patient_labels.columns = ['Subject ID', 'PatientClass']
             
-            # Split treino/teste
             from sklearn.model_selection import train_test_split
             train_patients, test_patients = train_test_split(
                 patient_labels['Subject ID'].values,
@@ -1874,7 +1960,6 @@ class AlzheimerApp:
                 random_state=42
             )
             
-            # Split validação do treino
             train_patient_labels = patient_labels[patient_labels['Subject ID'].isin(train_patients)]
             train_patients_final, val_patients = train_test_split(
                 train_patient_labels['Subject ID'].values,
@@ -1883,13 +1968,10 @@ class AlzheimerApp:
                 random_state=42
             )
             
-            # Filtrar exames
             df_train = df_bin[df_bin['Subject ID'].isin(train_patients_final)].copy()
             df_val = df_bin[df_bin['Subject ID'].isin(val_patients)].copy()
             df_test = df_bin[df_bin['Subject ID'].isin(test_patients)].copy()
             
-            # Salvar CSVs
-            # Normalizar ClassBinary antes de salvar (garantir consistência)
             df_train = self.normalize_classbinary_column(df_train)
             df_val = self.normalize_classbinary_column(df_val)
             df_test = self.normalize_classbinary_column(df_test)
@@ -1898,7 +1980,6 @@ class AlzheimerApp:
             df_val.to_csv('val_split.csv', sep=';', decimal='.', index=False)
             df_test.to_csv('test_split.csv', sep=';', decimal='.', index=False)
             
-            # Exibir resultados
             self.text_results_p9.config(state=tk.NORMAL)
             self.text_results_p9.delete(1.0, tk.END)
             self.text_results_p9.insert(tk.END, "=" * 60 + "\n")
@@ -1932,7 +2013,6 @@ class AlzheimerApp:
             self.text_results_p9.insert(tk.END, f"  Pacientes Demented: {len(test_patients_classes[test_patients_classes == 'Demented'])}\n")
             self.text_results_p9.insert(tk.END, f"  Pacientes NonDemented: {len(test_patients_classes[test_patients_classes == 'NonDemented'])}\n\n")
             
-            # Verificar vazamento
             train_ids = set(df_train['Subject ID'].unique())
             val_ids = set(df_val['Subject ID'].unique())
             test_ids = set(df_test['Subject ID'].unique())
@@ -1960,8 +2040,8 @@ class AlzheimerApp:
             self.text_results_p9.insert(tk.END, "  - test_split.csv\n")
             
             self.text_results_p9.config(state=tk.DISABLED)
-            self.lbl_split_status.config(text="✓ Split concluído com sucesso!", foreground="green")
-            messagebox.showinfo("Sucesso", "Split de dados concluído!\n\nArquivos salvos:\n- train_split.csv\n- val_split.csv\n- test_split.csv")
+            self.lbl_split_status.config(text="Split concluído com sucesso.", foreground="green")
+            messagebox.showinfo("Sucesso", "Split de dados concluído com sucesso.\n\nArquivos salvos:\n- train_split.csv\n- val_split.csv\n- test_split.csv")
             
         except Exception as e:
             self.lbl_split_status.config(text=f"Erro: {str(e)}", foreground="red")
@@ -1969,8 +2049,6 @@ class AlzheimerApp:
             self.text_results_p9.insert(tk.END, f"\nERRO: {str(e)}\n")
             self.text_results_p9.config(state=tk.DISABLED)
             messagebox.showerror("Erro", f"Erro ao executar split:\n{str(e)}")
-    
-    # --- PARTE 10: CLASSIFICADORES ---
     
     def browse_image_dir_resnet(self):
         """Seleciona pasta de imagens para ResNet50"""
@@ -1987,7 +2065,6 @@ class AlzheimerApp:
         import sys
         import io
         
-        # Verificar se os CSVs existem
         required_files = ["train_split.csv", "val_split.csv", "test_split.csv"]
         missing = [f for f in required_files if not os.path.exists(f)]
         if missing:
@@ -1995,36 +2072,30 @@ class AlzheimerApp:
             return
         
         self.lbl_status_p10.config(
-            text="Treinando XGBoost com Random Search... (isso pode levar alguns minutos)", 
+            text="Treinando modelo com Random Search... (pode levar alguns minutos)", 
             foreground="blue"
         )
         self.root.update()
         
-        # Redirecionar stdout para capturar prints
         old_stdout = sys.stdout
         sys.stdout = buffer = io.StringIO()
         
         try:
-            # Executar método da classe
             self.train_xgboost_classifier_internal()
             
-            # Capturar output
             output = buffer.getvalue()
-            
-            # Restaurar stdout
             sys.stdout = old_stdout
             
-            # Exibir resultados
             self.text_results_p10.config(state=tk.NORMAL)
             self.text_results_p10.insert(tk.END, output)
             self.text_results_p10.see(tk.END)
             self.text_results_p10.config(state=tk.DISABLED)
             
-            self.lbl_status_p10.config(text="✓ XGBoost treinado com sucesso! (Random Search concluído)", foreground="green")
+            self.lbl_status_p10.config(text="Treinamento concluído com sucesso.", foreground="green")
             messagebox.showinfo(
                 "Sucesso", 
-                "XGBoost treinado com Random Search!\n\n"
-                "Os melhores hiperparâmetros foram encontrados automaticamente.\n\n"
+                "XGBoost treinado com sucesso.\n\n"
+                "Hiperparâmetros otimizados automaticamente via Random Search.\n\n"
                 "Arquivos gerados:\n"
                 "- learning_curve_xgb.png\n"
                 "- confusion_xgb.png"
@@ -2047,41 +2118,33 @@ class AlzheimerApp:
         import sys
         import io
         
-        # Verificar se os CSVs existem
         required_files = ["train_split.csv", "val_split.csv", "test_split.csv"]
         missing = [f for f in required_files if not os.path.exists(f)]
         if missing:
-            messagebox.showerror("Erro", f"Arquivos não encontrados: {missing}\n\nExecute a Parte 9 primeiro!")
+            messagebox.showerror("Erro", f"Arquivos não encontrados: {missing}\n\nExecute a Parte 9 primeiro para gerar os splits.")
             return
         
-        # Obter pasta de imagens
         image_dir = self.entry_image_dir_resnet.get() if hasattr(self, 'entry_image_dir_resnet') else "images"
         
-        self.lbl_status_resnet.config(text="Treinando ResNet50... (isso pode levar vários minutos)", foreground="blue")
+        self.lbl_status_resnet.config(text="Treinando modelo... (pode levar vários minutos)", foreground="blue")
         self.root.update()
         
-        # Redirecionar stdout
         old_stdout = sys.stdout
         sys.stdout = buffer = io.StringIO()
         
         try:
-            # Executar método da classe
             self.train_resnet50_classifier_internal(base_image_dir=image_dir)
             
-            # Capturar output
             output = buffer.getvalue()
-            
-            # Restaurar stdout
             sys.stdout = old_stdout
             
-            # Exibir resultados
             self.text_results_resnet.config(state=tk.NORMAL)
             self.text_results_resnet.insert(tk.END, output)
             self.text_results_resnet.see(tk.END)
             self.text_results_resnet.config(state=tk.DISABLED)
             
-            self.lbl_status_resnet.config(text="✓ ResNet50 treinado com sucesso!", foreground="green")
-            messagebox.showinfo("Sucesso", "ResNet50 treinado!\n\nVerifique os arquivos gerados:\n- learning_curve_resnet50.png\n- confusion_resnet50.png")
+            self.lbl_status_resnet.config(text="Treinamento concluído com sucesso.", foreground="green")
+            messagebox.showinfo("Sucesso", "ResNet50 treinado com sucesso.\n\nArquivos gerados:\n- learning_curve_resnet50.png\n- confusion_resnet50.png")
             
         except Exception as e:
             sys.stdout = old_stdout
@@ -2095,11 +2158,6 @@ class AlzheimerApp:
             import traceback
             traceback.print_exc()
     
-    
-    # ============================================================================
-    # MÉTODOS INTERNOS DA PARTE 10 - CLASSIFICADORES
-    # ============================================================================
-    
     def find_image_path_column_p10(self, df):
         """Encontra automaticamente a coluna que contém o caminho das imagens"""
         possible_cols = ["filepath", "path", "image_path", "ImagePath", "filename", "FileName", "Image Path"]
@@ -2111,23 +2169,17 @@ class AlzheimerApp:
         return None
     
     def get_image_path_p10(self, row, df, base_image_dir="images"):
-        """
-        Determina o caminho da imagem para uma linha do DataFrame.
-        Tenta várias estratégias automaticamente.
-        """
-        # Estratégia 1: Coluna explícita de caminho
+        """Determina o caminho da imagem usando múltiplas estratégias de busca."""
         path_col = self.find_image_path_column_p10(df)
         if path_col:
             path = row[path_col]
             if pd.notna(path) and path:
                 if os.path.exists(path):
                     return path
-                # Tentar com base_image_dir
                 full_path = os.path.join(base_image_dir, os.path.basename(path))
                 if os.path.exists(full_path):
                     return full_path
         
-        # Estratégia 2: Usar MRI ID ou Image Data ID
         id_cols = ["MRI ID", "MRI_ID", "Image Data ID", "ImageDataID", "ImageID"]
         for col in id_cols:
             if col in df.columns:
@@ -2135,24 +2187,19 @@ class AlzheimerApp:
                 if pd.notna(img_id):
                     img_id_str = str(img_id).strip()
                     
-                    # Lista de sufixos comuns em imagens médicas (axl=axial, cor=coronal, sag=sagittal)
                     suffixes = ['_axl', '_cor', '_sag', '_axial', '_coronal', '_sagittal', 
                                '_ax', '_axl_', '_cor_', '_sag_']
                     
-                    # Tentar diferentes extensões
                     for ext in ['.nii', '.nii.gz', '.png', '.jpg', '.jpeg']:
-                        # 1. Tentar nome exato
                         path = os.path.join(base_image_dir, f"{img_id_str}{ext}")
                         if os.path.exists(path):
                             return path
                         
-                        # 2. Tentar com sufixos comuns (ex: OAS2_0164_MR1_axl.nii)
                         for suffix in suffixes:
                             path = os.path.join(base_image_dir, f"{img_id_str}{suffix}{ext}")
                             if os.path.exists(path):
                                 return path
                         
-                        # 3. Tentar com sufixo antes da extensão (caso o nome já tenha extensão)
                         if ext in img_id_str:
                             base_name = img_id_str.replace(ext, '')
                             for suffix in suffixes:
@@ -2160,30 +2207,25 @@ class AlzheimerApp:
                                 if os.path.exists(path):
                                     return path
                     
-                    # 4. Tentar sem extensão (arquivo pode não ter extensão no nome)
                     path = os.path.join(base_image_dir, img_id_str)
                     if os.path.exists(path):
                         return path
                     
-                    # 5. Tentar com sufixos sem extensão
                     for suffix in suffixes:
                         path = os.path.join(base_image_dir, f"{img_id_str}{suffix}")
                         if os.path.exists(path):
                             return path
                     
-                    # 6. Buscar arquivos que começam com o MRI ID (busca mais flexível)
                     try:
                         if os.path.exists(base_image_dir):
                             for file in os.listdir(base_image_dir):
-                                # Verificar se o arquivo começa com o MRI ID
                                 if file.startswith(img_id_str):
                                     full_path = os.path.join(base_image_dir, file)
                                     if os.path.isfile(full_path):
-                                        # Verificar se é um formato suportado
                                         if any(file.lower().endswith(ext) for ext in ['.nii', '.nii.gz', '.png', '.jpg', '.jpeg']):
                                             return full_path
                     except (OSError, PermissionError):
-                        pass  # Ignorar erros de permissão
+                        pass
         
         return None
     
@@ -2202,11 +2244,9 @@ class AlzheimerApp:
         """
         try:
             if image_path.endswith(('.nii', '.nii.gz')):
-                # Carregar arquivo NIfTI
                 nii_img = nib.load(image_path)
                 img_data = nii_img.get_fdata().astype(np.float32)
                 
-                # Processar diferentes dimensões
                 if len(img_data.shape) == 4:
                     # 4D: (x, y, z, time) - pegar primeiro volume
                     img_data = img_data[:, :, :, 0]
@@ -2359,7 +2399,6 @@ class AlzheimerApp:
                     img_array = (img_array - mean) / std
                 
             else:
-                # Carregar imagem normal (PNG, JPG, etc.)
                 img = Image.open(image_path).convert('RGB')
                 img = img.resize(target_size, Image.Resampling.LANCZOS)
                 img_array = np.array(img).astype(np.float32)
@@ -2388,7 +2427,6 @@ class AlzheimerApp:
         print("CLASSIFICADOR RASO (XGBOOST)")
         print("="*70)
         
-        # Ler CSVs
         print("\n1. Carregando dados...")
         train_df = pd.read_csv("train_split.csv", sep=";", decimal=".")
         val_df = pd.read_csv("val_split.csv", sep=";", decimal=".")
@@ -2401,7 +2439,6 @@ class AlzheimerApp:
         # Features base
         base_features = ["area", "perimeter", "eccentricity", "extent", "solidity"]
         
-        # Verificar quais features existem
         available_features = [f for f in base_features if f in train_df.columns]
         missing_features = [f for f in base_features if f not in train_df.columns]
         
@@ -2413,12 +2450,10 @@ class AlzheimerApp:
             print("   ERRO: Nenhuma feature disponível!")
             return
         
-        # Preparar dados
         X_train = train_df[available_features].copy()
         X_val = val_df[available_features].copy()
         X_test = test_df[available_features].copy()
         
-        # Converter para numérico
         for col in available_features:
             X_train[col] = pd.to_numeric(X_train[col], errors='coerce')
             X_val[col] = pd.to_numeric(X_val[col], errors='coerce')
@@ -2439,18 +2474,15 @@ class AlzheimerApp:
         print(f"   Validação - NonDemented: {sum(y_val == 0)}, Demented: {sum(y_val == 1)}")
         print(f"   Teste - NonDemented: {sum(y_test == 0)}, Demented: {sum(y_test == 1)}")
         
-        # Normalizar dados (importante para melhor performance)
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_val_scaled = scaler.transform(X_val)
         X_test_scaled = scaler.transform(X_test)
         
-        # Converter de volta para DataFrame para manter nomes das colunas
         X_train_scaled = pd.DataFrame(X_train_scaled, columns=available_features, index=X_train.index)
         X_val_scaled = pd.DataFrame(X_val_scaled, columns=available_features, index=X_val.index)
         X_test_scaled = pd.DataFrame(X_test_scaled, columns=available_features, index=X_test.index)
         
-        # Calcular scale_pos_weight para balanceamento
         pos_weight = sum(y_train == 0) / sum(y_train == 1) if sum(y_train == 1) > 0 else 1.0
         print(f"\n3. scale_pos_weight calculado: {pos_weight:.2f}")
         print("   Dados normalizados com StandardScaler")
@@ -2503,11 +2535,11 @@ class AlzheimerApp:
         best_params = random_search.best_params_
         best_score = random_search.best_score_
         
-        print(f"\n   ✓ Random Search concluído!")
+        print(f"\n    Random Search concluído!")
         print(f"   Melhor ROC-AUC (CV): {best_score:.4f} ({best_score*100:.2f}%)")
         print(f"   Melhores parâmetros encontrados:")
         for param, value in sorted(best_params.items()):
-            print(f"     • {param}: {value}")
+            print(f"     - {param}: {value}")
         
         # Treinar XGBoost com os melhores parâmetros e EARLY STOPPING
         print("\n5. Treinando XGBoost com os melhores parâmetros e early stopping...")
@@ -4098,14 +4130,14 @@ class AlzheimerApp:
             
             # Comentário sobre qualidade
             if test_mae < 5.0 and test_r2 > 0.5:
-                print("\n  ✓ Qualidade ACEITÁVEL: MAE baixo e R² razoável indicam que as imagens")
+                print("\n   Qualidade ACEITÁVEL: MAE baixo e R² razoável indicam que as imagens")
                 print("    NIfTI (slice axial) capturam informação relevante sobre a idade.")
             elif test_mae < 10.0 and test_r2 > 0.3:
-                print("\n  ⚠ Qualidade MODERADA: As imagens fornecem alguma informação sobre idade,")
+                print("\n   Qualidade MODERADA: As imagens fornecem alguma informação sobre idade,")
                 print("    mas há espaço para melhoria. Considere usar múltiplos slices ou")
                 print("    modelos mais complexos.")
             else:
-                print("\n  ✗ Qualidade FRACA: O slice único pode não ser suficiente para predição")
+                print("\n   Qualidade FRACA: O slice único pode não ser suficiente para predição")
                 print("    precisa de idade. Considere usar múltiplos slices ou combinar com")
                 print("    features tabulares.")
             print("="*70 + "\n")
@@ -4176,7 +4208,7 @@ class AlzheimerApp:
                 print(f"   Pacientes com violação de idade crescente: {len(violations)}")
                 
                 if violations:
-                    print(f"\n   ⚠ ATENÇÃO: Encontradas {len(violations)} violações de monotonicidade!")
+                    print(f"\n    ATENÇÃO: Encontradas {len(violations)} violações de monotonicidade!")
                     print("   (Idade diminuiu entre visitas consecutivas)")
                     print("\n   Detalhes das violações:")
                     for v in violation_details[:10]:  # Mostrar até 10
@@ -4185,14 +4217,14 @@ class AlzheimerApp:
                     if len(violation_details) > 10:
                         print(f"     ... e mais {len(violation_details) - 10} violações")
                     print("\n   Possíveis causas:")
-                    print("     • Erros de entrada de dados")
-                    print("     • Diferentes métodos de cálculo de idade")
-                    print("     • Dados de diferentes estudos/fontes")
+                    print("     - Erros de entrada de dados")
+                    print("     - Diferentes métodos de cálculo de idade")
+                    print("     - Dados de diferentes estudos/fontes")
                 else:
-                    print("\n   ✓ Nenhuma violação encontrada! A idade cresce monotonicamente")
+                    print("\n    Nenhuma violação encontrada! A idade cresce monotonicamente")
                     print("     com as visitas, como esperado.")
             else:
-                print("   ⚠ Colunas de patient_id ou visit não encontradas.")
+                print("    Colunas de patient_id ou visit não encontradas.")
                 if not patient_id_col:
                     print(f"     Procurou por: {patient_id_cols}")
                 if not visit_col:
@@ -4298,7 +4330,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             self.update_auto_seeds_display()
             self.auto_seed_x_entry.delete(0, tk.END)
             self.auto_seed_y_entry.delete(0, tk.END)
-            self.log(f"✅ Seed fixo adicionado: ({x}, {y}). Total: {len(self.auto_seed_points)}")
+            self.log(f" Seed fixo adicionado: ({x}, {y}). Total: {len(self.auto_seed_points)}")
         except ValueError:
             messagebox.showerror("Erro", "Digite valores numéricos válidos para X e Y!")
     
@@ -4312,7 +4344,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         index = selection[0]
         removed = self.auto_seed_points.pop(index)
         self.update_auto_seeds_display()
-        self.log(f"✅ Seed fixo removido: {removed}. Total: {len(self.auto_seed_points)}")
+        self.log(f" Seed fixo removido: {removed}. Total: {len(self.auto_seed_points)}")
     
     # --- Métodos de Atualização de Parâmetros de Filtros ---
     
@@ -4690,7 +4722,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         filter_type = self.filter_mode.get()
         params = self.filter_params
         
-        self.log(f"\n🔧 Aplicando filtro: {filter_type.upper()}")
+        self.log(f"\nAplicando filtro: {filter_type.upper()}")
         self.log(f"   Base: {'Imagem filtrada anterior' if self.current_filtered_image else 'Imagem original'}")
         
         # Converte para numpy
@@ -4707,7 +4739,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             # Depois Otsu
             _, img_filtered = cv2.threshold(img_filtered, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             filter_name = f"Otsu+CLAHE(clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']})"
-            self.log(f"   ✓ Params: clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']}")
+            self.log(f"    Params: clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']}")
             
         elif filter_type == "clahe":
             clahe = cv2.createCLAHE(
@@ -4716,36 +4748,36 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             )
             img_filtered = clahe.apply(img_np)
             filter_name = f"CLAHE(clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']})"
-            self.log(f"   ✓ Params: clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']}")
+            self.log(f"    Params: clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']}")
             
         elif filter_type == "otsu":
             _, img_filtered = cv2.threshold(img_np, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             filter_name = "Otsu"
-            self.log("   ✓ Binarização automática")
+            self.log("    Binarização automática")
             
         elif filter_type == "canny":
             img_filtered = cv2.Canny(img_np, params['canny_low'], params['canny_high'])
             filter_name = f"Canny(low={params['canny_low']}, high={params['canny_high']})"
-            self.log(f"   ✓ Params: low={params['canny_low']}, high={params['canny_high']}")
+            self.log(f"    Params: low={params['canny_low']}, high={params['canny_high']}")
             
         elif filter_type == "gaussian":
             k = params['gaussian_kernel']
             img_filtered = cv2.GaussianBlur(img_np, (k, k), 0)
             filter_name = f"Gaussian(k={k})"
-            self.log(f"   ✓ Params: kernel={k}x{k}")
+            self.log(f"    Params: kernel={k}x{k}")
             
         elif filter_type == "median":
             k = params['median_kernel']
             img_filtered = cv2.medianBlur(img_np, k)
             filter_name = f"Median(k={k})"
-            self.log(f"   ✓ Params: kernel={k}x{k}")
+            self.log(f"    Params: kernel={k}x{k}")
             
         elif filter_type == "bilateral":
             d = params['bilateral_d']
             sigma = params['bilateral_sigma']
             img_filtered = cv2.bilateralFilter(img_np, d, sigma, sigma)
             filter_name = f"Bilateral(d={d}, σ={sigma})"
-            self.log(f"   ✓ Params: d={d}, sigma={sigma}")
+            self.log(f"    Params: d={d}, sigma={sigma}")
         
         elif filter_type == "erosion":
             kernel_size = params['erosion_kernel']
@@ -4755,10 +4787,10 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             # Aplica erosão
             img_filtered = cv2.erode(img_np, kernel, iterations=iterations)
             filter_name = f"Erosão(k={kernel_size}, iter={iterations})"
-            self.log(f"   ✓ Params: kernel={kernel_size}x{kernel_size}, iterations={iterations}")
+            self.log(f"    Params: kernel={kernel_size}x{kernel_size}, iterations={iterations}")
         
         else:
-            self.log(f"   ⚠ Filtro desconhecido: {filter_type}")
+            self.log(f"    Filtro desconhecido: {filter_type}")
             return
         
         # Adiciona ao histórico
@@ -4772,7 +4804,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         self.display_image(self.preprocessed_image, self.canvas_preprocessed, "preprocessed")
         
         # Atualiza labels
-        history_text = " → ".join(self.filter_history)
+        history_text = " > ".join(self.filter_history)
         self.lbl_filter_history.config(text=history_text, foreground="purple")
         
         self.lbl_current_filter.config(
@@ -4780,7 +4812,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             foreground="green"
         )
         
-        self.log(f"✅ Filtro aplicado! Total de filtros: {len(self.filter_history)}")
+        self.log(f" Filtro aplicado! Total de filtros: {len(self.filter_history)}")
         self.log(f"   Pipeline: {history_text}\n")
     
     def reset_filters(self):
@@ -4804,7 +4836,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         self.lbl_filter_history.config(text="Nenhum (resetado)", foreground="gray")
         self.lbl_current_filter.config(text="Status: Original (sem filtros)", foreground="green")
         
-        self.log("✅ Filtros resetados! Imagem original restaurada.\n")
+        self.log(" Filtros resetados! Imagem original restaurada.\n")
         messagebox.showinfo("Reset", "Todos os filtros foram removidos!\nImagem original restaurada.")
 
     def toggle_multi_seed_mode(self):
@@ -4829,7 +4861,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
     def open_batch_config_window(self):
         """Abre janela de configuração avançada para processamento em lote."""
         config_window = tk.Toplevel(self.root)
-        config_window.title("⚙️ Configuração de Processamento em Lote")
+        config_window.title(" Configuração de Processamento em Lote")
         config_window.geometry("700x800")
         config_window.resizable(True, True)
         config_window.transient(self.root)  # Mantém a janela no topo
@@ -4902,14 +4934,14 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         config_window.update_scroll = update_scroll
         
         # Título
-        title_label = ttk.Label(main_frame, text="🔧 Configuração Avançada de Lote", 
+        title_label = ttk.Label(main_frame, text="Configuração Avançada de Lote", 
                                 font=("Arial", 14, "bold"), foreground="darkblue")
         title_label.pack(pady=10)
         
         # ═══════════════════════════════════════════════════════════
         # SEÇÃO 1: FILTROS PARA APLICAR
         # ═══════════════════════════════════════════════════════════
-        filter_frame = ttk.LabelFrame(main_frame, text="🎨 1. FILTROS A APLICAR (Pipeline)", padding="10")
+        filter_frame = ttk.LabelFrame(main_frame, text=" 1. FILTROS A APLICAR (Pipeline)", padding="10")
         filter_frame.pack(fill=tk.X, pady=10)
         
         ttk.Label(filter_frame, text="📋 Adicione filtros ao pipeline (opcional):", 
@@ -4962,14 +4994,14 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         self.batch_filter_list.insert(tk.END, "   (Nenhum filtro adicionado - OPCIONAL)")
         self.batch_filter_list.config(foreground="gray")
         
-        btn_clear_filters = ttk.Button(filter_frame, text="🗑️ Limpar Filtros", 
+        btn_clear_filters = ttk.Button(filter_frame, text=" Limpar Filtros", 
                                        command=self.clear_batch_filters)
         btn_clear_filters.pack(pady=2)
         
         # ═══════════════════════════════════════════════════════════
         # SEÇÃO 2: SEED POINTS
         # ═══════════════════════════════════════════════════════════
-        seed_frame = ttk.LabelFrame(main_frame, text="📍 2. SEED POINTS", padding="10")
+        seed_frame = ttk.LabelFrame(main_frame, text="2. Seed Points", padding="10")
         seed_frame.pack(fill=tk.X, pady=10)
         
         ttk.Label(seed_frame, text="Configure os pontos de seed para region growing:", 
@@ -5001,14 +5033,14 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         self.batch_seeds = [(158,98),(109,124),(109,81)]
         self.update_seed_list()
         
-        btn_clear_seeds = ttk.Button(seed_frame, text="🗑️ Limpar Seeds", 
+        btn_clear_seeds = ttk.Button(seed_frame, text=" Limpar Seeds", 
                                      command=self.clear_batch_seeds)
         btn_clear_seeds.pack(pady=2)
         
         # ═══════════════════════════════════════════════════════════
         # SEÇÃO 3: PARÂMETROS DE SEGMENTAÇÃO
         # ═══════════════════════════════════════════════════════════
-        seg_frame = ttk.LabelFrame(main_frame, text="⚙️ 3. PARÂMETROS DE SEGMENTAÇÃO", padding="10")
+        seg_frame = ttk.LabelFrame(main_frame, text=" 3. PARÂMETROS DE SEGMENTAÇÃO", padding="10")
         seg_frame.pack(fill=tk.X, pady=10)
         
         # Threshold
@@ -5077,11 +5109,11 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(pady=20)
         
-        btn_execute = ttk.Button(btn_frame, text="▶️ EXECUTAR PROCESSAMENTO EM LOTE", 
+        btn_execute = ttk.Button(btn_frame, text=" EXECUTAR PROCESSAMENTO EM LOTE", 
                                 command=lambda: self.execute_batch_with_config(config_window))
         btn_execute.pack(side=tk.LEFT, padx=5)
         
-        btn_cancel = ttk.Button(btn_frame, text="❌ Cancelar", 
+        btn_cancel = ttk.Button(btn_frame, text=" Cancelar", 
                                command=config_window.destroy)
         btn_cancel.pack(side=tk.LEFT, padx=5)
         
@@ -5103,14 +5135,12 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             'params': params
         }
         
-        # Remove mensagem inicial se for o primeiro filtro
         if len(self.batch_filters) == 0:
             self.batch_filter_list.delete(0, tk.END)
             self.batch_filter_list.config(foreground="black")
         
         self.batch_filters.append(filter_info)
         
-        # Atualiza lista visual com parâmetros
         filter_display = {
             "clahe": f"CLAHE(clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']})",
             "gaussian": f"Gaussian(k={params['gaussian_kernel']})",
@@ -5123,19 +5153,15 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         
         detailed_name = filter_display.get(filter_type, display_name)
         self.batch_filter_list.insert(tk.END, f"{len(self.batch_filters)}. {detailed_name}")
-        
-        # Atualiza contador
+
         self.lbl_filter_count.config(text=f"({len(self.batch_filters)} filtro{'s' if len(self.batch_filters) > 1 else ''})", 
                                      foreground="darkgreen")
         
-        # Atualiza status visual na própria janela (sem popup)
         if hasattr(self, 'batch_config_status'):
             self.batch_config_status.config(
-                text=f"✅ Filtro '{detailed_name}' adicionado! Total: {len(self.batch_filters)}",
+                text=f" Filtro '{detailed_name}' adicionado! Total: {len(self.batch_filters)}",
                 foreground="green"
             )
-            
-            # Limpa o status após 3 segundos
             if hasattr(self, 'batch_status_timer'):
                 try:
                     window.after_cancel(self.batch_status_timer)
@@ -5146,7 +5172,6 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             except:
                 pass
         
-        # Atualiza scroll se disponível
         if hasattr(window, 'update_scroll'):
             window.update_scroll()
     
@@ -5154,20 +5179,15 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         """Limpa todos os filtros do lote."""
         self.batch_filters = []
         self.batch_filter_list.delete(0, tk.END)
-        # Restaura mensagem inicial
         self.batch_filter_list.insert(tk.END, "   (Nenhum filtro adicionado - OPCIONAL)")
         self.batch_filter_list.config(foreground="gray")
-        # Atualiza contador
         self.lbl_filter_count.config(text="(0 filtros)", foreground="gray")
         
-        # Atualiza status visual (sem popup)
-        # Nota: batch_config_status pode não existir se a janela não estiver aberta
         if hasattr(self, 'batch_config_status'):
             self.batch_config_status.config(
-                text="✅ Todos os filtros foram removidos!",
+                text=" Todos os filtros foram removidos!",
                 foreground="orange"
             )
-            # Limpa o status após 3 segundos
             if hasattr(self, 'batch_status_timer'):
                 self.batch_config_status.master.after_cancel(self.batch_status_timer)
             self.batch_status_timer = self.batch_config_status.master.after(
@@ -5186,7 +5206,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             # Atualiza status visual (sem popup)
             if hasattr(self, 'batch_config_status'):
                 self.batch_config_status.config(
-                    text=f"✅ Seed ({x}, {y}) adicionado! Total: {len(self.batch_seeds)}",
+                    text=f" Seed ({x}, {y}) adicionado! Total: {len(self.batch_seeds)}",
                     foreground="green"
                 )
                 # Limpa o status após 3 segundos
@@ -5213,7 +5233,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         # Atualiza status visual (sem popup)
         if hasattr(self, 'batch_config_status'):
             self.batch_config_status.config(
-                text="✅ Todos os seeds foram removidos!",
+                text=" Todos os seeds foram removidos!",
                 foreground="orange"
             )
             # Limpa o status após 3 segundos
@@ -5277,19 +5297,19 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             return
         
         # Confirmação
-        filter_pipeline = " → ".join([f['type'] for f in self.batch_filters]) if self.batch_filters else "Nenhum"
+        filter_pipeline = " > ".join([f['type'] for f in self.batch_filters]) if self.batch_filters else "Nenhum"
         
         result = messagebox.askyesno(
             "Confirmar Processamento em Lote",
             f"Processar {len(nii_files)} arquivos .nii?\n\n"
-            f"📂 Entrada: {input_folder}\n"
-            f"📂 Saída: {output_folder}\n\n"
-            f"🎨 Filtros: {len(self.batch_filters)}\n"
+            f"Entrada: {input_folder}\n"
+            f"Saída: {output_folder}\n\n"
+            f"Filtros: {len(self.batch_filters)}\n"
             f"   {filter_pipeline}\n\n"
-            f"📍 Seeds: {len(self.batch_seeds)}\n"
+            f"Seeds: {len(self.batch_seeds)}\n"
             f"   {self.batch_seeds}\n\n"
-            f"⚙️ Threshold: {self.batch_threshold_var.get()}\n"
-            f"⚙️ Kernel: {self.batch_kernel_var.get()}x{self.batch_kernel_var.get()}"
+            f"Threshold: {self.batch_threshold_var.get()}\n"
+            f"Kernel: {self.batch_kernel_var.get()}x{self.batch_kernel_var.get()}"
         )
         
         if not result:
@@ -5304,7 +5324,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         self.descriptors_list = []
         
         self.log("\n" + "="*80)
-        self.log("📁 PROCESSAMENTO EM LOTE - CONFIGURAÇÃO PERSONALIZADA")
+        self.log(" PROCESSAMENTO EM LOTE - CONFIGURAÇÃO PERSONALIZADA")
         self.log("="*80)
         self.log(f"Pasta de entrada: {input_folder}")
         self.log(f"Pasta de saída: {output_folder}")
@@ -5350,7 +5370,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                     filter_type = filter_info['type']
                     params = filter_info['params']
                     
-                    self.log(f"   🔧 Aplicando filtro: {filter_type}")
+                    self.log(f"   Aplicando filtro: {filter_type}")
                     
                     if filter_type == "clahe":
                         clahe = cv2.createCLAHE(
@@ -5393,13 +5413,13 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                         processed_img = cv2.erode(processed_img, kernel, iterations=iterations)
                 
                 # SEGMENTAÇÃO MULTI-SEED
-                self.log(f"   🎯 Segmentação com {len(self.batch_seeds)} seeds")
+                self.log(f"    Segmentação com {len(self.batch_seeds)} seeds")
                 combined_mask = None
                 
                 for seed_x, seed_y in self.batch_seeds:
                     # Verifica limites
                     if seed_x < 0 or seed_y < 0 or seed_x >= processed_img.shape[1] or seed_y >= processed_img.shape[0]:
-                        self.log(f"      ⚠ Seed ({seed_x}, {seed_y}) fora dos limites")
+                        self.log(f"       Seed ({seed_x}, {seed_y}) fora dos limites")
                         continue
                     
                     mask = self.region_growing(processed_img, (seed_x, seed_y), 
@@ -5412,12 +5432,12 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                         combined_mask = cv2.bitwise_or(combined_mask, mask)
                 
                 if combined_mask is None:
-                    self.log(f"   ⚠ Nenhum seed válido! Pulando...")
+                    self.log(f"    Nenhum seed válido! Pulando...")
                     error_count += 1
                     continue
                 
                 # PÓS-PROCESSAMENTO MORFOLÓGICO
-                self.log(f"   🔬 Morfologia: kernel={self.batch_kernel_var.get()}x{self.batch_kernel_var.get()}")
+                self.log(f"   Morfologia: kernel={self.batch_kernel_var.get()}x{self.batch_kernel_var.get()}")
                 
                 kernel_size = self.batch_kernel_var.get()
                 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
@@ -5425,11 +5445,11 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                 
                 if self.batch_var_opening.get():
                     final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel)
-                    self.log(f"      ✓ Abertura")
+                    self.log(f"       Abertura")
                 
                 if self.batch_var_closing.get():
                     final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, kernel)
-                    self.log(f"      ✓ Fechamento")
+                    self.log(f"       Fechamento")
                 
                 if self.batch_var_fill_holes.get():
                     contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -5437,7 +5457,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                     for cnt in contours:
                         cv2.drawContours(filled_mask, [cnt], 0, 255, -1)
                     final_mask = filled_mask
-                    self.log(f"      ✓ Preencher buracos")
+                    self.log(f"       Preencher buracos")
                 
                 if self.batch_var_smooth.get():
                     contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -5447,36 +5467,24 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                         smoothed_cnt = cv2.approxPolyDP(cnt, epsilon, True)
                         cv2.drawContours(smoothed_mask, [smoothed_cnt], 0, 255, -1)
                     final_mask = smoothed_mask
-                    self.log(f"      ✓ Suavizar contornos")
+                    self.log(f"       Suavizar contornos")
                 
                 # VALIDAÇÃO: Verifica se a segmentação não excedeu o limite
                 is_valid, num_pixels = self.validate_segmentation_mask(final_mask, f"(LOTE: {filename})")
                 if not is_valid:
-                    self.log(f"      ⚠️ Region Growing falhou para {filename} ({num_pixels} pixels)")
-                    self.log(f"      🔄 Aplicando método alternativo...")
-                    # Usa método alternativo
-                    final_mask = self.apply_alternative_segmentation(
-                        processed_img, 
-                        method=self.alternative_segmentation_method,
-                        threshold=30
-                    )
-                    # Valida novamente
-                    is_valid_alt, num_pixels_alt = self.validate_segmentation_mask(final_mask, f"(ALTERNATIVO: {filename})")
-                    if is_valid_alt:
-                        self.log(f"      ✅ Método alternativo funcionou! {num_pixels_alt} pixels")
-                    else:
-                        self.log(f"      ⚠️ Método alternativo também excedeu limite ({num_pixels_alt} pixels)")
+                    self.log(f"      AVISO: Region Growing falhou para {filename} ({num_pixels} pixels)")
+                    self.log(f"      Segmentacao pode estar incorreta. Verifique parametros ou imagem.")
                 
                 # Extrai descritores morfológicos
                 base_name = os.path.splitext(filename)[0]
                 if filename.endswith('.nii.gz'):
                     base_name = base_name.replace('.nii', '')
                 
-                self.log(f"   📊 Extraindo descritores morfológicos para: {base_name}")
+                self.log(f"    Extraindo descritores morfológicos para: {base_name}")
                 descriptors = self.extrair_descritores_ventriculo(final_mask, image_id=base_name)
                 if descriptors:
                     self.descriptors_list.append(descriptors)
-                    self.log(f"      ✅ Descritores adicionados (total: {len(self.descriptors_list)})")
+                    self.log(f"       Descritores adicionados (total: {len(self.descriptors_list)})")
                 
                 # CRIA IMAGEM SEGMENTADA COM CONTORNO VERMELHO
                 img_with_contour = cv2.cvtColor(img_data, cv2.COLOR_GRAY2BGR)
@@ -5502,23 +5510,23 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                 cv2.imwrite(filtered_path, processed_img)
                 
                 num_pixels = np.sum(final_mask == 255)
-                self.log(f"   ✅ Sucesso: {len(large_contours)} região(ões), {num_pixels} pixels")
-                self.log(f"   📁 Salvos: {mask_filename}, {segmented_filename}, {filtered_filename}")
+                self.log(f"    Sucesso: {len(large_contours)} região(ões), {num_pixels} pixels")
+                self.log(f"    Salvos: {mask_filename}, {segmented_filename}, {filtered_filename}")
                 
                 success_count += 1
                 
             except Exception as e:
-                self.log(f"   ❌ ERRO: {str(e)}")
+                self.log(f"    ERRO: {str(e)}")
                 error_count += 1
         
         # Salva CSV de descritores
         if len(self.descriptors_list) > 0:
             csv_path = self.salvar_descritores_csv(output_dir=output_folder)
             if csv_path:
-                self.log(f"📄 CSV de descritores salvo: {csv_path}")
+                self.log(f"CSV de descritores salvo: {csv_path}")
                 
                 # Faz merge automático dos CSVs
-                self.log("\n🔄 Executando merge automático dos CSVs...")
+                self.log("\n Executando merge automático dos CSVs...")
                 merged_path = self.merge_csv_files(
                     demographic_csv_path="oasis_longitudinal_demographic.csv",
                     descriptors_csv_path=csv_path,
@@ -5526,29 +5534,29 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                     show_messagebox=False  # Não mostra messagebox quando executado automaticamente
                 )
                 if merged_path:
-                    self.log(f"✅ Merge concluído: {merged_path}")
+                    self.log(f" Merge concluído: {merged_path}")
         
         # RELATÓRIO FINAL
         self.log("\n" + "="*80)
-        self.log("📊 RELATÓRIO FINAL")
+        self.log(" RELATÓRIO FINAL")
         self.log("="*80)
-        self.log(f"✅ Sucesso: {success_count}/{len(nii_files)}")
-        self.log(f"❌ Erros: {error_count}/{len(nii_files)}")
+        self.log(f" Sucesso: {success_count}/{len(nii_files)}")
+        self.log(f" Erros: {error_count}/{len(nii_files)}")
         self.log(f"📂 Resultados salvos em: {output_folder}")
         if len(self.descriptors_list) > 0:
-            self.log(f"📊 Descritores extraídos: {len(self.descriptors_list)}")
+            self.log(f" Descritores extraídos: {len(self.descriptors_list)}")
         self.log("="*80 + "\n")
         
         # self.lbl_batch_status.config(
-        #     text=f"✅ Lote concluído! {success_count} OK, {error_count} erros",
+        #     text=f" Lote concluído! {success_count} OK, {error_count} erros",
         #     foreground="green"
         # )
         
         messagebox.showinfo(
             "Processamento Concluído",
             f"Processamento em lote finalizado!\n\n"
-            f"✅ Sucesso: {success_count}\n"
-            f"❌ Erros: {error_count}\n\n"
+            f" Sucesso: {success_count}\n"
+            f" Erros: {error_count}\n\n"
             f"Resultados salvos em:\n{output_folder}"
         )
 
@@ -5573,11 +5581,11 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         
         if not nii_files:
             messagebox.showwarning("Aviso", "Nenhum arquivo .nii encontrado na pasta!")
-            self.log("⚠ Nenhum arquivo .nii encontrado.")
+            self.log(" Nenhum arquivo .nii encontrado.")
             return
         
         self.log("\n" + "="*70)
-        self.log("📁 PROCESSAMENTO EM LOTE - SEGMENTAÇÃO AUTOMÁTICA")
+        self.log(" PROCESSAMENTO EM LOTE - SEGMENTAÇÃO AUTOMÁTICA")
         self.log("="*70)
         self.log(f"Pasta de entrada: {input_folder}")
         self.log(f"Pasta de saída: {output_folder}")
@@ -5591,13 +5599,13 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             f"Entrada: {input_folder}\n"
             f"Saída: {output_folder}\n\n"
             f"Parâmetros:\n"
-            f"• Seeds: {self.auto_seed_points}\n"
-            f"• Threshold: {self.region_growing_threshold}\n"
-            f"• Kernel: {self.morphology_kernel_size}x{self.morphology_kernel_size}"
+            f"- Seeds: {self.auto_seed_points}\n"
+            f"- Threshold: {self.region_growing_threshold}\n"
+            f"- Kernel: {self.morphology_kernel_size}x{self.morphology_kernel_size}"
         )
         
         if not result:
-            self.log("❌ Processamento cancelado pelo usuário.\n")
+            self.log(" Processamento cancelado pelo usuário.\n")
             return
         
         # Limpa lista de descritores para novo processamento
@@ -5651,7 +5659,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                         combined_mask = cv2.bitwise_or(combined_mask, mask)
                 
                 if combined_mask is None:
-                    self.log(f"   ⚠ Seeds fora dos limites! Pulando...")
+                    self.log(f"    Seeds fora dos limites! Pulando...")
                     error_count += 1
                     continue
                 
@@ -5663,11 +5671,11 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                 if filename.endswith('.nii.gz'):
                     base_name = base_name.replace('.nii', '')
                 
-                self.log(f"   📊 Extraindo descritores morfológicos para: {base_name}")
+                self.log(f"    Extraindo descritores morfológicos para: {base_name}")
                 descriptors = self.extrair_descritores_ventriculo(final_mask, image_id=base_name)
                 if descriptors:
                     self.descriptors_list.append(descriptors)
-                    self.log(f"      ✅ Descritores adicionados (total: {len(self.descriptors_list)})")
+                    self.log(f"       Descritores adicionados (total: {len(self.descriptors_list)})")
                 
                 # Cria imagem segmentada com contorno amarelo
                 img_with_contour = cv2.cvtColor(img_data, cv2.COLOR_GRAY2BGR)
@@ -5688,24 +5696,24 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                 cv2.imwrite(segmented_path, img_with_contour)
                 
                 num_pixels = np.sum(final_mask == 255)
-                self.log(f"   ✓ Segmentado: {len(large_contours)} região(ões), {num_pixels} pixels")
-                self.log(f"   ✓ Salvo: {mask_filename}")
-                self.log(f"   ✓ Salvo: {segmented_filename}")
+                self.log(f"    Segmentado: {len(large_contours)} região(ões), {num_pixels} pixels")
+                self.log(f"    Salvo: {mask_filename}")
+                self.log(f"    Salvo: {segmented_filename}")
                 
                 success_count += 1
                 
             except Exception as e:
-                self.log(f"   ❌ ERRO: {str(e)}")
+                self.log(f"    ERRO: {str(e)}")
                 error_count += 1
         
         # Salva CSV de descritores
         if len(self.descriptors_list) > 0:
             csv_path = self.salvar_descritores_csv(output_dir=output_folder)
             if csv_path:
-                self.log(f"📄 CSV de descritores salvo: {csv_path}")
+                self.log(f"CSV de descritores salvo: {csv_path}")
                 
                 # Faz merge automático dos CSVs
-                self.log("\n🔄 Executando merge automático dos CSVs...")
+                self.log("\n Executando merge automático dos CSVs...")
                 merged_path = self.merge_csv_files(
                     demographic_csv_path="oasis_longitudinal_demographic.csv",
                     descriptors_csv_path=csv_path,
@@ -5713,21 +5721,21 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                     show_messagebox=False  # Não mostra messagebox quando executado automaticamente
                 )
                 if merged_path:
-                    self.log(f"✅ Merge concluído: {merged_path}")
+                    self.log(f" Merge concluído: {merged_path}")
         
         # Relatório final
         self.log("-"*70)
-        self.log(f"✅ PROCESSAMENTO EM LOTE CONCLUÍDO!")
-        self.log(f"   • Total processado: {len(nii_files)}")
-        self.log(f"   • Sucessos: {success_count}")
-        self.log(f"   • Erros: {error_count}")
-        self.log(f"   • Pasta de saída: {output_folder}")
+        self.log(f" PROCESSAMENTO EM LOTE CONCLUÍDO!")
+        self.log(f"   - Total processado: {len(nii_files)}")
+        self.log(f"   - Sucessos: {success_count}")
+        self.log(f"   - Erros: {error_count}")
+        self.log(f"   - Pasta de saída: {output_folder}")
         if len(self.descriptors_list) > 0:
-            self.log(f"   • Descritores extraídos: {len(self.descriptors_list)}")
+            self.log(f"   - Descritores extraídos: {len(self.descriptors_list)}")
         self.log("="*70 + "\n")
         
         # self.lbl_batch_status.config(
-        #     text=f"✓ Concluído: {success_count}/{len(nii_files)} arquivos",
+        #     text=f" Concluído: {success_count}/{len(nii_files)} arquivos",
         #     foreground="green"
         # )
         
@@ -5778,7 +5786,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             # Depois aplica Otsu Thresholding - binarização automática
             _, filtered_img = cv2.threshold(enhanced_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             self.lbl_current_filter.config(text="Pré-proc: Otsu + CLAHE", foreground="green")
-            self.log("✓ Filtro Otsu + CLAHE aplicado.")
+            self.log(" Filtro Otsu + CLAHE aplicado.")
             
         else:
             filtered_img = img_np.copy()
@@ -5791,7 +5799,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         """Captura clique na janela FILTRADA (janela 2) para segmentação."""
         if self.preprocessed_image is None:
             messagebox.showwarning("Aviso", "Aplique um filtro primeiro!")
-            self.log("⚠ Nenhuma imagem filtrada disponível. Use a Seção 1 primeiro.")
+            self.log(" Nenhuma imagem filtrada disponível. Use a Seção 1 primeiro.")
             return
 
         # Pega coordenadas do clique
@@ -5819,10 +5827,10 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
 
         # Verifica se o clique está dentro da imagem
         if img_x < 0 or img_y < 0 or img_x >= img_w or img_y >= img_h:
-            self.log("⚠ Clique fora da imagem.")
+            self.log(" Clique fora da imagem.")
             return
 
-        self.log(f"📍 Clique na JANELA 2 (Filtrada): X={img_x}, Y={img_y}")
+        self.log(f"Clique na JANELA 2 (Filtrada): X={img_x}, Y={img_y}")
         
         # Executa segmentação (sempre usa a imagem filtrada)
         self.execute_segmentation_at_point(img_x, img_y, "filtered")
@@ -5857,11 +5865,11 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
 
         # Verifica se o clique está dentro da imagem
         if img_x < 0 or img_y < 0 or img_x >= img_w or img_y >= img_h:
-            self.log("⚠ Clique fora da imagem.")
+            self.log(" Clique fora da imagem.")
             return
 
-        self.log(f"📍 Clique na JANELA 1 (Original): X={img_x}, Y={img_y}")
-        self.log(f"💡 Dica: Clique na JANELA 2 (Filtrada) para melhores resultados!")
+        self.log(f"Clique na JANELA 1 (Original): X={img_x}, Y={img_y}")
+        self.log(f"Dica: Clique na JANELA 2 (Filtrada) para melhores resultados!")
         
         # Executa segmentação (usa a janela 2 se disponível)
         self.execute_segmentation_at_point(img_x, img_y, "original")
@@ -5877,11 +5885,11 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         # SEMPRE USA A IMAGEM PRÉ-PROCESSADA (JANELA 2) se disponível
         if self.preprocessed_image is not None:
             img_for_seg_pil = self.preprocessed_image
-            self.log(f"🎨 Usando imagem PRÉ-PROCESSADA (Janela 2) para segmentação")
+            self.log(f" Usando imagem PRÉ-PROCESSADA (Janela 2) para segmentação")
         else:
             # Se não houver imagem pré-processada, usa a original
             img_for_seg_pil = self.original_image
-            self.log(f"⚠️ Usando imagem ORIGINAL (sem filtros) - Aplique um filtro primeiro para melhores resultados")
+            self.log(f"Usando imagem ORIGINAL (sem filtros) - Aplique um filtro primeiro para melhores resultados")
         
         # Converte para numpy
         img_for_seg_np = np.array(img_for_seg_pil.convert('L'))
@@ -5890,14 +5898,14 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         method = self.segmentation_method.get()
         
         if method == "region_growing":
-            self.log(f"🌱 Método: Region Growing (threshold={self.region_growing_threshold})")
+            self.log(f"Método: Region Growing (threshold={self.region_growing_threshold})")
             
             if self.multi_seed_mode:
                 # Modo Multi-Seed
                 self.multi_seed_points.append((img_x, img_y))
-                self.log(f"🎯 Multi-Seed {len(self.multi_seed_points)}: ({img_x}, {img_y})")
+                self.log(f" Multi-Seed {len(self.multi_seed_points)}: ({img_x}, {img_y})")
                 self.lbl_multi_seed.config(
-                    text=f"🎯 Multi-Seed: {len(self.multi_seed_points)} ponto(s)",
+                    text=f" Multi-Seed: {len(self.multi_seed_points)} ponto(s)",
                     foreground="purple"
                 )
                 
@@ -5921,53 +5929,23 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                                           connectivity=self.connectivity_var.get())
                 final_mask = self.apply_morphological_postprocessing(mask)
             
-        elif method == "watershed":
-            self.log("🎯 Método: Watershed")
-            # Implementação placeholder do Watershed
-            messagebox.showinfo("Em desenvolvimento", "Watershed será implementado em breve!")
-            return
-            
-        elif method == "adaptive_threshold":
-            self.log("🔲 Método: Adaptive Thresholding")
-            # Implementação placeholder
-            messagebox.showinfo("Em desenvolvimento", "Adaptive Threshold será implementado em breve!")
-            return
-            
-        elif method == "kmeans":
-            self.log("🧲 Método: K-Means Clustering")
-            # Implementação placeholder
-            messagebox.showinfo("Em desenvolvimento", "K-Means será implementado em breve!")
-            return
-        
         # VALIDAÇÃO: Verifica se a segmentação não excedeu o limite
         is_valid, num_pixels = self.validate_segmentation_mask(final_mask, "(MANUAL)")
         if not is_valid:
-            self.log(f"\n🔄 Region Growing falhou ({num_pixels} pixels). Aplicando método alternativo...")
-            # Usa método alternativo
-            final_mask = self.apply_alternative_segmentation(
-                img_for_seg_np, 
-                method=self.alternative_segmentation_method,
-                threshold=30
-            )
-            # Valida novamente
-            is_valid_alt, num_pixels_alt = self.validate_segmentation_mask(final_mask, "(ALTERNATIVO)")
-            if is_valid_alt:
-                self.log(f"   ✅ Método alternativo funcionou! {num_pixels_alt} pixels")
-            else:
-                self.log(f"   ⚠️ Método alternativo também excedeu limite ({num_pixels_alt} pixels)")
+            self.log(f"\nAVISO: Region Growing falhou ({num_pixels} pixels)")
+            self.log(f"Segmentacao pode estar incorreta. Ajuste os parametros ou tente outra imagem.")
         
         # Armazena máscara
         self.image_mask = final_mask
         
         # Extrai descritores morfológicos
         image_id = os.path.basename(self.image_path) if self.image_path else f"manual_{len(self.descriptors_list)}"
-        self.log(f"\n📊 Extraindo descritores morfológicos para: {image_id}")
+        self.log(f"\n Extraindo descritores morfológicos para: {image_id}")
         descriptors = self.extrair_descritores_ventriculo(final_mask, image_id=image_id)
         if descriptors:
             self.descriptors_list.append(descriptors)
-            self.log(f"   ✅ Descritores adicionados à lista (total: {len(self.descriptors_list)})")
+            self.log(f"    Descritores adicionados à lista (total: {len(self.descriptors_list)})")
         
-        # Visualiza resultado na janela 3: SEMPRE usa a imagem PRÉ-PROCESSADA (se disponível)
         if self.preprocessed_image is not None:
             base_img = np.array(self.preprocessed_image.convert('L'))
         else:
@@ -5990,9 +5968,9 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         
         # Estatísticas
         num_pixels = np.sum(final_mask == 255)
-        self.log(f"✅ Segmentação concluída: {len(large_contours)} região(ões) | {num_pixels} pixels")
+        self.log(f" Segmentação concluída: {len(large_contours)} região(ões) | {num_pixels} pixels")
         self.lbl_segment_status.config(
-            text=f"✅ {len(large_contours)} região(ões) | {num_pixels} px",
+            text=f" {len(large_contours)} região(ões) | {num_pixels} px",
             foreground="green"
         )
 
@@ -6011,7 +5989,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         # Aplica CLAHE para realçar regiões e melhorar o region growing
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
         img_processed = clahe.apply(img_np)
-        self.log("   → Aplicando CLAHE adicional para melhorar região de crescimento")
+        self.log("   Aplicando CLAHE adicional para melhorar regiao de crescimento")
         
         return img_processed
 
@@ -6080,7 +6058,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         # 1. Abertura (Opening) - Remove ruído pequeno
         if self.apply_opening:
             processed_mask = cv2.morphologyEx(processed_mask, cv2.MORPH_OPEN, kernel, iterations=1)
-            self.log(f"   → Abertura aplicada (kernel {kernel_size}x{kernel_size})")
+            self.log(f"   Abertura aplicada (kernel {kernel_size}x{kernel_size})")
         
         # 2. Preenchimento de buracos (Fill Holes)
         if self.apply_fill_holes:
@@ -6093,7 +6071,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                 cv2.drawContours(filled_mask, [cnt], 0, 255, -1)  # -1 preenche o interior
             
             processed_mask = filled_mask
-            self.log(f"   → Buracos preenchidos ({len(contours)} regiões)")
+            self.log(f"   Buracos preenchidos ({len(contours)} regioes)")
         
         # 3. Suavização de contornos (Contour Smoothing)
         if self.apply_smooth_contours:
@@ -6109,7 +6087,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                 cv2.drawContours(smoothed_mask, [smoothed_cnt], 0, 255, -1)
             
             processed_mask = smoothed_mask
-            self.log(f"   → Contornos suavizados")
+            self.log(f"   Contornos suavizados")
         
         return processed_mask
     
@@ -6129,461 +6107,18 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         is_valid = num_pixels <= self.max_segmentation_pixels
         
         if not is_valid:
-            self.log(f"\n⚠️ VALIDAÇÃO FALHOU {context}:")
+            self.log(f"\nVALIDAÇÃO FALHOU {context}:")
             self.log(f"   Pixels encontrados: {num_pixels}")
             self.log(f"   Limite máximo: {self.max_segmentation_pixels}")
             self.log(f"   Excesso: {num_pixels - self.max_segmentation_pixels} pixels")
-            self.log(f"   💡 A segmentação provavelmente capturou muito da imagem.")
-            self.log(f"   🔄 Método alternativo será implementado aqui.")
+            self.log(f"    A segmentação provavelmente capturou muito da imagem.")
+            self.log(f"    Método alternativo será implementado aqui.")
         
         return is_valid, num_pixels
     
     # ============================================================================
     # MÉTODOS ALTERNATIVOS DE SEGMENTAÇÃO (para quando Region Growing falha)
     # ============================================================================
-    
-    def segment_roi_fixed_rectangle(self, image, roi_width=200, roi_height=200, threshold=30):
-        """
-        1. ROI Fixa / Central Crop (retângulo A×B)
-        Recorta uma janela central e trabalha só nela.
-        """
-        h, w = image.shape
-        center_x, center_y = w // 2, h // 2
-        
-        # Define ROI central
-        x1 = max(0, center_x - roi_width // 2)
-        y1 = max(0, center_y - roi_height // 2)
-        x2 = min(w, center_x + roi_width // 2)
-        y2 = min(h, center_y + roi_height // 2)
-        
-        # Recorta ROI
-        roi = image[y1:y2, x1:x2]
-        
-        # Aplica threshold binário (pixels pretos)
-        _, binary_roi = cv2.threshold(roi, threshold, 255, cv2.THRESH_BINARY_INV)
-        
-        # Cria máscara completa
-        mask = np.zeros((h, w), dtype=np.uint8)
-        mask[y1:y2, x1:x2] = binary_roi
-        
-        self.log(f"   📐 ROI Fixa: ({x1},{y1}) a ({x2},{y2}), tamanho {roi_width}x{roi_height}")
-        return mask
-    
-    def segment_spatial_mask_fixed(self, image, mask_width=200, mask_height=200, threshold=30, shape='rectangular'):
-        """
-        2. Máscara Espacial Fixa (retangular ou elíptica)
-        Aplica uma máscara no centro e ignora o resto.
-        """
-        h, w = image.shape
-        center_x, center_y = w // 2, h // 2
-        
-        # Cria máscara espacial
-        spatial_mask = np.zeros((h, w), dtype=np.uint8)
-        
-        if shape == 'rectangular':
-            x1 = max(0, center_x - mask_width // 2)
-            y1 = max(0, center_y - mask_height // 2)
-            x2 = min(w, center_x + mask_width // 2)
-            y2 = min(h, center_y + mask_height // 2)
-            spatial_mask[y1:y2, x1:x2] = 255
-        else:  # elíptica
-            cv2.ellipse(spatial_mask, (center_x, center_y), 
-                       (mask_width // 2, mask_height // 2), 0, 0, 360, 255, -1)
-        
-        # Aplica threshold na imagem
-        _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
-        
-        # Combina: só pixels pretos dentro da máscara espacial
-        mask = cv2.bitwise_and(binary, spatial_mask)
-        
-        self.log(f"   🎭 Máscara Espacial {shape}: {mask_width}x{mask_height}")
-        return mask
-    
-    def segment_connected_components(self, image, threshold=30, min_area=100, max_components=5):
-        """
-        3. Componentes Conexos (Connected Component Labeling)
-        Rotula blocos pretos e escolhe os do centro pelo tamanho + posição.
-        """
-        h, w = image.shape
-        center_x, center_y = w // 2, h // 2
-        
-        # Threshold binário
-        _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
-        
-        # Rotula componentes conectados
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
-        
-        # Calcula score para cada componente (tamanho + proximidade do centro)
-        component_scores = []
-        for i in range(1, num_labels):  # Ignora fundo (label 0)
-            area = stats[i, cv2.CC_STAT_AREA]
-            if area < min_area:
-                continue
-            
-            cx, cy = centroids[i]
-            dist_from_center = np.sqrt((cx - center_x)**2 + (cy - center_y)**2)
-            
-            # Score: maior área e mais próximo do centro
-            score = area / (1 + dist_from_center / 100)
-            component_scores.append((i, score, area, dist_from_center))
-        
-        # Ordena por score e pega os melhores
-        component_scores.sort(key=lambda x: x[1], reverse=True)
-        selected_labels = [x[0] for x in component_scores[:max_components]]
-        
-        # Cria máscara com componentes selecionados
-        mask = np.zeros((h, w), dtype=np.uint8)
-        for label in selected_labels:
-            mask[labels == label] = 255
-        
-        self.log(f"   🔗 Componentes Conexos: {len(selected_labels)} componentes selecionados")
-        return mask
-    
-    def segment_centroid_based(self, image, threshold=30, brain_mask=None):
-        """
-        4. Seleção por Centróide / Prior Espacial
-        Calcula centróide do cérebro e pega componentes pretos mais próximos.
-        """
-        h, w = image.shape
-        
-        # Se não tiver máscara do cérebro, usa threshold adaptativo
-        if brain_mask is None:
-            _, brain_mask = cv2.threshold(image, 50, 255, cv2.THRESH_BINARY)
-        
-        # Calcula centróide do cérebro
-        moments = cv2.moments(brain_mask)
-        if moments["m00"] != 0:
-            brain_cx = int(moments["m10"] / moments["m00"])
-            brain_cy = int(moments["m01"] / moments["m00"])
-        else:
-            brain_cx, brain_cy = w // 2, h // 2
-        
-        # Threshold para pixels pretos
-        _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
-        
-        # Componentes conectados
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
-        
-        # Seleciona componentes próximos do centróide
-        mask = np.zeros((h, w), dtype=np.uint8)
-        for i in range(1, num_labels):
-            cx, cy = centroids[i]
-            dist = np.sqrt((cx - brain_cx)**2 + (cy - brain_cy)**2)
-            
-            # Se estiver dentro de um raio do centróide
-            if dist < min(w, h) * 0.3:  # 30% da dimensão menor
-                mask[labels == i] = 255
-        
-        self.log(f"   📍 Centróide: ({brain_cx}, {brain_cy})")
-        return mask
-    
-    def segment_hole_filling(self, image, threshold=30):
-        """
-        5. Preenchimento de Buracos (Binary Hole Filling / Hole Detection)
-        Detecta cavidades internas automaticamente dentro da massa branca.
-        """
-        # Threshold: branco = cérebro, preto = fundo
-        _, binary_white = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY)
-        
-        # Inverte: agora preto = cérebro, branco = fundo
-        binary_inv = cv2.bitwise_not(binary_white)
-        
-        # Preenche buracos (cavidades pretas dentro do branco)
-        # Flood fill do fundo
-        h, w = binary_inv.shape
-        mask_filled = binary_inv.copy()
-        
-        # Preenche bordas primeiro
-        cv2.floodFill(mask_filled, None, (0, 0), 255)
-        cv2.floodFill(mask_filled, None, (w-1, 0), 255)
-        cv2.floodFill(mask_filled, None, (0, h-1), 255)
-        cv2.floodFill(mask_filled, None, (w-1, h-1), 255)
-        
-        # Buracos são o que ficou preto (não foi preenchido)
-        holes = cv2.bitwise_not(mask_filled)
-        
-        self.log(f"   🕳️ Preenchimento de Buracos: detectados")
-        return holes
-    
-    def segment_flood_fill_background(self, image, threshold=30):
-        """
-        6. Flood Fill do Fundo + Inversão
-        Separa fundo de buracos internos.
-        """
-        h, w = image.shape
-        
-        # Threshold binário
-        _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
-        
-        # Flood fill do fundo (bordas)
-        mask = binary.copy()
-        cv2.floodFill(mask, None, (0, 0), 0)
-        cv2.floodFill(mask, None, (w-1, 0), 0)
-        cv2.floodFill(mask, None, (0, h-1), 0)
-        cv2.floodFill(mask, None, (w-1, h-1), 0)
-        
-        # O que não foi preenchido são os buracos internos
-        holes = cv2.bitwise_not(mask)
-        holes = cv2.bitwise_and(holes, binary)  # Só dentro da região branca
-        
-        self.log(f"   🌊 Flood Fill do Fundo: aplicado")
-        return holes
-    
-    def segment_distance_transform(self, image, threshold=30, brain_mask=None):
-        """
-        7. Transformada de Distância + Limiar no Interior
-        Pega só a região mais interna da máscara do cérebro e extrai o preto dali.
-        """
-        h, w = image.shape
-        
-        # Máscara do cérebro (se não fornecida)
-        if brain_mask is None:
-            _, brain_mask = cv2.threshold(image, 50, 255, cv2.THRESH_BINARY)
-        
-        # Transformada de distância (distância de cada pixel até a borda)
-        dist_transform = cv2.distanceTransform(brain_mask, cv2.DIST_L2, 5)
-        
-        # Normaliza
-        dist_transform = cv2.normalize(dist_transform, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        
-        # Pega apenas região mais interna (últimos 30% da distância)
-        _, inner_region = cv2.threshold(dist_transform, int(255 * 0.7), 255, cv2.THRESH_BINARY)
-        
-        # Dentro dessa região, pega pixels pretos
-        _, black_pixels = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
-        
-        # Combina: buracos pretos dentro da região interna
-        mask = cv2.bitwise_and(black_pixels, inner_region)
-        
-        self.log(f"   📏 Transformada de Distância: região interna")
-        return mask
-    
-    def segment_watershed_markers(self, image, threshold=30, num_markers=3):
-        """
-        8. Watershed por Marcadores (Marker-based Watershed)
-        Bom quando os buracos pretos se tocam e precisa dividir.
-        """
-        h, w = image.shape
-        
-        # Threshold binário
-        _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
-        
-        # Operação morfológica para separar objetos que se tocam
-        kernel = np.ones((3, 3), np.uint8)
-        sure_bg = cv2.dilate(binary, kernel, iterations=3)
-        
-        # Encontra região certa (sure foreground)
-        dist_transform = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
-        _, sure_fg = cv2.threshold(dist_transform, 0.7 * dist_transform.max(), 255, 0)
-        sure_fg = np.uint8(sure_fg)
-        
-        # Região desconhecida
-        unknown = cv2.subtract(sure_bg, sure_fg)
-        
-        # Marcadores
-        _, markers = cv2.connectedComponents(sure_fg)
-        markers = markers + 1
-        markers[unknown == 255] = 0
-        
-        # Watershed
-        image_color = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        markers = cv2.watershed(image_color, markers)
-        
-        # Cria máscara (marcadores > 1 são objetos)
-        mask = np.zeros((h, w), dtype=np.uint8)
-        mask[markers > 1] = 255
-        
-        self.log(f"   🌊 Watershed com Marcadores: {num_markers} marcadores")
-        return mask
-    
-    def segment_active_contours(self, image, threshold=30, init_contour=None):
-        """
-        9. Active Contours / Snakes
-        Contornos ativos que se ajustam às bordas.
-        """
-        # Threshold para criar imagem binária
-        _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
-        
-        # Se não tiver contorno inicial, cria um circular no centro
-        h, w = image.shape
-        if init_contour is None:
-            center_x, center_y = w // 2, h // 2
-            radius = min(w, h) // 4
-            theta = np.linspace(0, 2*np.pi, 100)
-            init_contour = np.array([[center_x + radius * np.cos(t), 
-                                     center_y + radius * np.sin(t)] for t in theta], dtype=np.int32)
-        
-        # Aplica active contours (simplificado - usa findContours como aproximação)
-        # Em implementação completa, usaria scipy ou implementação própria
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Encontra contorno mais próximo do inicial
-        if len(contours) > 0:
-            # Seleciona maior contorno interno
-            mask = np.zeros((h, w), dtype=np.uint8)
-            largest_contour = max(contours, key=cv2.contourArea)
-            cv2.drawContours(mask, [largest_contour], -1, 255, -1)
-        else:
-            mask = np.zeros((h, w), dtype=np.uint8)
-        
-        self.log(f"   🐍 Active Contours: aplicado")
-        return mask
-    
-    def apply_alternative_segmentation(self, image, method='roi_fixed', **kwargs):
-        """
-        Aplica método alternativo de segmentação quando Region Growing falha.
-        
-        Args:
-            image: numpy array 2D (grayscale)
-            method: nome do método a usar
-            **kwargs: parâmetros específicos do método
-            
-        Returns:
-            mask: numpy array 2D binário
-        """
-        self.log(f"\n🔄 Aplicando método alternativo: {method}")
-        
-        method_map = {
-            'roi_fixed': self.segment_roi_fixed_rectangle,
-            'spatial_mask': self.segment_spatial_mask_fixed,
-            'connected_components': self.segment_connected_components,
-            'centroid_based': self.segment_centroid_based,
-            'hole_filling': self.segment_hole_filling,
-            'flood_fill': self.segment_flood_fill_background,
-            'distance_transform': self.segment_distance_transform,
-            'watershed_markers': self.segment_watershed_markers,
-            'active_contours': self.segment_active_contours,
-        }
-        
-        if method not in method_map:
-            self.log(f"   ⚠️ Método '{method}' não encontrado, usando 'roi_fixed'")
-            method = 'roi_fixed'
-        
-        try:
-            mask = method_map[method](image, **kwargs)
-            num_pixels = np.sum(mask == 255)
-            self.log(f"   ✅ Método alternativo concluído: {num_pixels} pixels")
-            return mask
-        except Exception as e:
-            self.log(f"   ❌ Erro no método alternativo: {e}")
-            # Fallback para ROI fixa
-            return self.segment_roi_fixed_rectangle(image)
-
-    def test_segmentation_with_current_params(self):
-        """
-        Testa a segmentação usando os parâmetros ajustáveis atuais.
-        Usa os seeds fixos e os parâmetros da interface.
-        """
-        if self.original_image is None:
-            messagebox.showwarning("Aviso", "Por favor, carregue uma imagem primeiro.")
-            return
-        
-        self.log("\n" + "="*80)
-        self.log("🧪 TESTE DE SEGMENTAÇÃO COM PARÂMETROS ATUAIS")
-        self.log("="*80)
-        self.log(f"📌 Seeds: {self.auto_seed_points}")
-        self.log(f"🎚️ Threshold: {self.region_growing_threshold}")
-        self.log(f"🔧 Kernel: {self.morphology_kernel_size}x{self.morphology_kernel_size}")
-        self.log(f"🔹 Abertura: {'✅' if self.apply_opening else '❌'}")
-        self.log(f"🔹 Fechamento: {'✅' if self.apply_closing else '❌'}")
-        self.log(f"🔹 Preencher: {'✅' if self.apply_fill_holes else '❌'}")
-        self.log(f"🔹 Suavizar: {'✅' if self.apply_smooth_contours else '❌'}")
-        self.log(f"🖼️ Usando: Janela 2 (Pré-processada)")
-        
-        # SEMPRE USA A IMAGEM PRÉ-PROCESSADA (JANELA 2) se disponível
-        if self.preprocessed_image is not None:
-            img_np = np.array(self.preprocessed_image.convert('L'))
-            self.log("✅ Usando imagem da Janela 2 (Filtrada)")
-        else:
-            img_np = np.array(self.original_image.convert('L'))
-            self.log("⚠️ Usando imagem original - Aplique um filtro primeiro!")
-        
-        # Prepara imagem para segmentação (aplica CLAHE adicional)
-        img_for_segmentation = self.prepare_image_for_segmentation(img_np)
-        
-        # Aplica Region Growing em cada seed point e combina as máscaras
-        self.log(f"\n🎯 Aplicando Region Growing em {len(self.auto_seed_points)} seed points:")
-        combined_mask = None
-        
-        for i, (seed_x, seed_y) in enumerate(self.auto_seed_points, 1):
-            self.log(f"\n   Seed {i}/{len(self.auto_seed_points)}: ({seed_x}, {seed_y})")
-            
-            # Verifica se o seed está dentro da imagem
-            if seed_x < 0 or seed_y < 0 or seed_x >= img_np.shape[1] or seed_y >= img_np.shape[0]:
-                self.log(f"   ⚠ Seed fora dos limites da imagem! Ignorando...")
-                continue
-            
-            # Aplica region growing neste seed
-            mask = self.region_growing(img_for_segmentation, (seed_x, seed_y), 
-                                      threshold=self.region_growing_threshold,
-                                      connectivity=self.connectivity_var.get())
-            
-            num_pixels = np.sum(mask == 255)
-            self.log(f"   ✓ {num_pixels} pixels segmentados")
-            
-            # Combina com a máscara acumulada
-            if combined_mask is None:
-                combined_mask = mask.copy()
-            else:
-                combined_mask = cv2.bitwise_or(combined_mask, mask)
-
-        if combined_mask is None:
-            self.log("\n❌ Nenhum seed válido! Segmentação falhou.")
-            messagebox.showerror("Erro", "Nenhum seed point válido para segmentação.")
-            return
-
-        # Aplica pós-processamento morfológico
-        self.log("\n🔬 Aplicando pós-processamento morfológico:")
-        final_mask = self.apply_morphological_postprocessing(combined_mask)
-        
-        # VALIDAÇÃO: Verifica se a segmentação não excedeu o limite
-        is_valid, num_pixels = self.validate_segmentation_mask(final_mask, "(TESTE)")
-        if not is_valid:
-            self.log(f"\n🔄 Region Growing falhou ({num_pixels} pixels). Aplicando método alternativo...")
-            # Usa método alternativo
-            final_mask = self.apply_alternative_segmentation(
-                img_for_segmentation, 
-                method=self.alternative_segmentation_method,
-                threshold=30
-            )
-            # Valida novamente
-            is_valid_alt, num_pixels_alt = self.validate_segmentation_mask(final_mask, "(ALTERNATIVO)")
-            if is_valid_alt:
-                self.log(f"   ✅ Método alternativo funcionou! {num_pixels_alt} pixels")
-            else:
-                self.log(f"   ⚠️ Método alternativo também excedeu limite ({num_pixels_alt} pixels)")
-        
-        self.image_mask = final_mask
-
-        # Cria visualização: imagem original em RGB com contorno AMARELO
-        img_with_contour = cv2.cvtColor(img_np, cv2.COLOR_GRAY2BGR)
-        
-        # Encontra contornos na máscara final
-        contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Filtra contornos pequenos (ruído)
-        min_area = 50
-        large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
-        
-        # Desenha contornos em VERMELHO VIVO (BGR: 0, 0, 255)
-        cv2.drawContours(img_with_contour, large_contours, -1, (0, 0, 255), 3)
-        
-        # Converte para PIL e exibe no canvas segmented
-        segmented_pil = Image.fromarray(img_with_contour)
-        self.segmented_image = segmented_pil
-        self.display_image(segmented_pil, self.canvas_segmented, "segmented")
-        
-        # Exibe estatísticas finais
-        total_pixels = np.sum(final_mask == 255)
-        total_regions = len(large_contours)
-        
-        self.log(f"\n✅ Segmentação concluída!")
-        self.log(f"   • Total de pixels segmentados: {total_pixels}")
-        self.log(f"   • Número de regiões: {total_regions}")
-        self.log(f"   • Área percentual: {(total_pixels / (img_np.shape[0] * img_np.shape[1]) * 100):.2f}%")
-        self.log("="*80 + "\n")
-        
-        self.lbl_segment_status.config(text=f"✅ Teste: {total_regions} região(ões) | {total_pixels} pixels")
 
     def segment_ventricles(self):
         """ Executa a segmentação AUTOMÁTICA dos ventrículos usando Region Growing com múltiplos seeds. """
@@ -6592,7 +6127,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             return
 
         self.log("="*60)
-        self.log("🔬 SEGMENTAÇÃO AUTOMÁTICA DOS VENTRÍCULOS")
+        self.log("SEGMENTACAO AUTOMATICA DOS VENTRICULOS")
         self.log("="*60)
         self.log(f"Método: Region Growing Multi-Seed")
         self.log(f"Seeds fixos: {self.auto_seed_points}")
@@ -6603,16 +6138,16 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         # SEMPRE USA A IMAGEM PRÉ-PROCESSADA (JANELA 2) se disponível, senão usa a original
         if self.preprocessed_image is not None:
             img_np = np.array(self.preprocessed_image)
-            self.log("🎨 Usando imagem PRÉ-PROCESSADA (Janela 2) para segmentação")
+            self.log(" Usando imagem PRÉ-PROCESSADA (Janela 2) para segmentação")
         else:
             img_np = np.array(self.original_image)
-            self.log("⚠️ Usando imagem ORIGINAL (sem filtros) - Aplique um filtro primeiro para melhores resultados")
+            self.log("Usando imagem ORIGINAL (sem filtros) - Aplique um filtro primeiro para melhores resultados")
         
         # Prepara imagem para segmentação (CLAHE ou Otsu baseado na escolha)
         img_for_segmentation = self.prepare_image_for_segmentation(img_np)
 
         # Aplica Region Growing em cada seed point e combina as máscaras
-        self.log(f"\n🎯 Aplicando Region Growing em {len(self.auto_seed_points)} seed points:")
+        self.log(f"\n Aplicando Region Growing em {len(self.auto_seed_points)} seed points:")
         combined_mask = None
         
         for i, (seed_x, seed_y) in enumerate(self.auto_seed_points, 1):
@@ -6620,7 +6155,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             
             # Verifica se o seed está dentro da imagem
             if seed_x < 0 or seed_y < 0 or seed_x >= img_np.shape[1] or seed_y >= img_np.shape[0]:
-                self.log(f"   ⚠ Seed fora dos limites da imagem! Ignorando...")
+                self.log(f"    Seed fora dos limites da imagem! Ignorando...")
                 continue
             
             # Aplica region growing neste seed
@@ -6629,7 +6164,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                                       connectivity=self.connectivity_var.get())
             
             num_pixels = np.sum(mask == 255)
-            self.log(f"   ✓ {num_pixels} pixels segmentados")
+            self.log(f"    {num_pixels} pixels segmentados")
             
             # Combina com a máscara acumulada
             if combined_mask is None:
@@ -6638,40 +6173,29 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                 combined_mask = cv2.bitwise_or(combined_mask, mask)
 
         if combined_mask is None:
-            self.log("\n❌ Nenhum seed válido! Segmentação falhou.")
+            self.log("\n Nenhum seed válido! Segmentação falhou.")
             messagebox.showerror("Erro", "Nenhum seed point válido para segmentação.")
             return
 
         # Aplica pós-processamento morfológico
-        self.log("\n🔬 Aplicando pós-processamento morfológico:")
+        self.log("\nAplicando pos-processamento morfologico:")
         final_mask = self.apply_morphological_postprocessing(combined_mask)
         
         # VALIDAÇÃO: Verifica se a segmentação não excedeu o limite
         is_valid, num_pixels_final = self.validate_segmentation_mask(final_mask, "(AUTOMÁTICA)")
         if not is_valid:
-            self.log(f"\n🔄 Region Growing falhou ({num_pixels_final} pixels). Aplicando método alternativo...")
-            # Usa método alternativo
-            final_mask = self.apply_alternative_segmentation(
-                img_for_segmentation, 
-                method=self.alternative_segmentation_method,
-                threshold=30
-            )
-            # Valida novamente
-            is_valid_alt, num_pixels_alt = self.validate_segmentation_mask(final_mask, "(ALTERNATIVO)")
-            if is_valid_alt:
-                self.log(f"   ✅ Método alternativo funcionou! {num_pixels_alt} pixels")
-            else:
-                self.log(f"   ⚠️ Método alternativo também excedeu limite ({num_pixels_alt} pixels)")
+            self.log(f"\nAVISO: Region Growing falhou ({num_pixels_final} pixels)")
+            self.log(f"Segmentacao pode estar incorreta. Ajuste os parametros.")
         
         self.image_mask = final_mask
 
         # Extrai descritores morfológicos
         image_id = os.path.basename(self.image_path) if self.image_path else "imagem_atual"
-        self.log(f"\n📊 Extraindo descritores morfológicos para: {image_id}")
+        self.log(f"\n Extraindo descritores morfológicos para: {image_id}")
         descriptors = self.extrair_descritores_ventriculo(final_mask, image_id=image_id)
         if descriptors:
             self.descriptors_list.append(descriptors)
-            self.log(f"   ✅ Descritores adicionados à lista (total: {len(self.descriptors_list)})")
+            self.log(f"    Descritores adicionados à lista (total: {len(self.descriptors_list)})")
 
         # Cria visualização: imagem original em RGB com contorno AMARELO
         img_with_contour = cv2.cvtColor(img_np, cv2.COLOR_GRAY2BGR)
@@ -6692,100 +6216,17 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
         total_area = sum([cv2.contourArea(cnt) for cnt in large_contours])
         
         self.log("-"*60)
-        self.log(f"✅ SEGMENTAÇÃO CONCLUÍDA COM SUCESSO!")
-        self.log(f"   • Regiões encontradas: {len(large_contours)}")
-        self.log(f"   • Pixels segmentados: {num_pixels_final}")
-        self.log(f"   • Área total: {total_area:.2f} pixels²")
+        self.log(f" SEGMENTAÇÃO CONCLUÍDA COM SUCESSO!")
+        self.log(f"   - Regiões encontradas: {len(large_contours)}")
+        self.log(f"   - Pixels segmentados: {num_pixels_final}")
+        self.log(f"   - Área total: {total_area:.2f} pixels²")
         self.log("="*60 + "\n")
         
         # Atualiza status na interface
         self.lbl_segment_status.config(
-            text=f"✓ {len(large_contours)} região(ões) | {num_pixels_final} pixels",
+            text=f" {len(large_contours)} região(ões) | {num_pixels_final} pixels",
             foreground="green"
         )
-        
-    def extract_features(self):
-        """ Extrai as 6 características dos ventrículos segmentados. [cite: 79] """
-        if self.image_mask is None:
-            messagebox.showwarning("Aviso", "Execute a segmentação primeiro.")
-            return
-
-        self.log("Iniciando extração de características...")
-        
-        # TODO: Esta função deve ser executada em *todo* o dataset,
-        # não apenas em uma imagem.
-        # O fluxo correto seria:
-        # 1. Iterar por todas as imagens do dataset
-        # 2. Chamar segment_ventricles() para cada uma
-        # 3. Chamar esta função (adaptada) para extrair features
-        # 4. Salvar tudo em um novo DataFrame (self.features_df)
-        
-        # Por enquanto, extrai da imagem carregada:
-        contours, _ = cv2.findContours(self.image_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Assume o maior contorno (ou os dois maiores, para 2 ventrículos)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)
-        
-        if not contours:
-            self.log("Nenhum contorno encontrado na máscara.")
-            return
-
-        # TODO: Lógica para combinar os N maiores contornos (ventrículos)
-        # Aqui, vamos usar apenas o MAIOR contorno para simplificar
-        cnt = contours[0]
-        
-        try:
-            # 1. Área [cite: 79]
-            area = cv2.contourArea(cnt)
-            
-            # 2. Circularidade [cite: 79]
-            perimeter = cv2.arcLength(cnt, True)
-            circularity = 0
-            if perimeter > 0:
-                circularity = (4 * np.pi * area) / (perimeter**2)
-            
-            # 3. Excentricidade [cite: 79]
-            eccentricity = 0
-            if len(cnt) >= 5: # fitEllipse precisa de pelo menos 5 pontos
-                (x,y), (MA,ma), angle = cv2.fitEllipse(cnt)
-                a = ma / 2
-                b = MA / 2
-                if a > 0 and b > 0:
-                    # f = sqrt(a^2 - b^2) -> eccentricity = f/a
-                    eccentricity = np.sqrt(1 - (b**2 / a**2))
-            
-            # 4. Característica Extra 1 (Ex: Extensão)
-            rect_x, rect_y, w, h = cv2.boundingRect(cnt)
-            rect_area = w * h
-            extent = 0
-            if rect_area > 0:
-                extent = area / rect_area
-                
-            # 5. Característica Extra 2 (Ex: Solidez)
-            hull = cv2.convexHull(cnt)
-            hull_area = cv2.contourArea(hull)
-            solidity = 0
-            if hull_area > 0:
-                solidity = area / hull_area
-            
-            # 6. Característica Extra 3 (Ex: Diâmetro Equivalente)
-            equiv_diameter = np.sqrt(4 * area / np.pi)
-
-            self.log("Características extraídas (para o maior contorno):")
-            self.log(f"  Área: {area:.2f}")
-            self.log(f"  Circularidade: {circularity:.4f}")
-            self.log(f"  Excentricidade: {eccentricity:.4f}")
-            self.log(f"  Extensão: {extent:.4f}")
-            self.log(f"  Solidez: {solidity:.4f}")
-            self.log(f"  Diâmetro Eq.: {equiv_diameter:.2f}")
-
-            # TODO: Salvar em uma planilha complementar [cite: 80]
-            # Ex: self.features_df.loc[self.image_path] = [area, circularity, ...]
-            # E depois: self.features_df.to_csv("features_extra.csv")
-
-        except Exception as e:
-            self.log(f"Erro ao extrair características: {e}")
-            messagebox.showerror("Erro na Extração", f"Erro: {e}")
 
     def extrair_descritores_ventriculo(self, mask, image_id=None):
         """
@@ -6816,14 +6257,14 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             if white_ratio > 0.5:
                 # Máscara provavelmente invertida (ventrículo deveria ser menor)
                 mask = 1 - mask
-                self.log(f"   ⚠ Máscara invertida detectada (ratio={white_ratio:.2f}), corrigindo...")
+                self.log(f"    Máscara invertida detectada (ratio={white_ratio:.2f}), corrigindo...")
             
             # Rotula componentes conectados
             labeled_mask = measure.label(mask, connectivity=2)
             regions = measure.regionprops(labeled_mask)
             
             if len(regions) == 0:
-                self.log(f"   ⚠ Nenhum componente encontrado na máscara")
+                self.log(f"    Nenhum componente encontrado na máscara")
                 return None
             
             # Seleciona o(s) componente(s) do ventrículo
@@ -6833,7 +6274,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                 regions = sorted(regions, key=lambda r: r.area, reverse=True)
                 # Pega o maior componente (ou pode unir todos se necessário)
                 largest_region = regions[0]
-                self.log(f"   ℹ {len(regions)} componentes encontrados, usando o maior (área={largest_region.area})")
+                self.log(f"   {len(regions)} componentes encontrados, usando o maior (área={largest_region.area})")
             else:
                 largest_region = regions[0]
             
@@ -6880,7 +6321,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             }
             
             # Log dos valores
-            self.log(f"   📊 Descritores extraídos:")
+            self.log(f"    Descritores extraídos:")
             self.log(f"      Área: {area:.2f}")
             self.log(f"      Perímetro: {perimeter:.2f}")
             self.log(f"      Circularidade: {circularity:.4f}")
@@ -6892,7 +6333,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             return descriptors
             
         except Exception as e:
-            self.log(f"   ❌ Erro ao extrair descritores: {e}")
+            self.log(f"    Erro ao extrair descritores: {e}")
             return None
     
     def salvar_descritores_csv(self, output_dir=None):
@@ -6903,7 +6344,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             output_dir: diretório de saída (se None, usa diretório raiz)
         """
         if len(self.descriptors_list) == 0:
-            self.log("⚠ Nenhum descritor para salvar.")
+            self.log(" Nenhum descritor para salvar.")
             return
         
         try:
@@ -6947,14 +6388,14 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             # Salva CSV com ponto e vírgula como separador
             df.to_csv(output_path, index=False, sep=';')
             
-            self.log(f"\n✅ CSV de descritores salvo: {output_path}")
+            self.log(f"\n CSV de descritores salvo: {output_path}")
             self.log(f"   Total de registros: {len(df)}")
             self.log(f"   Colunas: {', '.join(columns_order)}")
             
             return output_path
             
         except Exception as e:
-            self.log(f"❌ Erro ao salvar CSV de descritores: {e}")
+            self.log(f" Erro ao salvar CSV de descritores: {e}")
             return None
     
     def merge_csv_files(self, demographic_csv_path=None, descriptors_csv_path=None, output_path=None, show_messagebox=True):
@@ -6977,28 +6418,28 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
                 output_path = "merged_data.csv"
             
             self.log("\n" + "="*80)
-            self.log("🔄 MERGE DE CSVs")
+            self.log(" MERGE DE CSVs")
             self.log("="*80)
-            self.log(f"📄 CSV Demografia: {demographic_csv_path}")
-            self.log(f"📄 CSV Descritores: {descriptors_csv_path}")
-            self.log(f"📄 CSV Saída: {output_path}")
+            self.log(f" CSV Demografia: {demographic_csv_path}")
+            self.log(f" CSV Descritores: {descriptors_csv_path}")
+            self.log(f" CSV Saída: {output_path}")
             self.log("-"*80)
             
             # Verifica se os arquivos existem
             if not os.path.exists(demographic_csv_path):
-                self.log(f"❌ Arquivo não encontrado: {demographic_csv_path}")
+                self.log(f" Arquivo não encontrado: {demographic_csv_path}")
                 if show_messagebox:
                     messagebox.showerror("Erro", f"Arquivo não encontrado: {demographic_csv_path}")
                 return None
             
             if not os.path.exists(descriptors_csv_path):
-                self.log(f"❌ Arquivo não encontrado: {descriptors_csv_path}")
+                self.log(f" Arquivo não encontrado: {descriptors_csv_path}")
                 if show_messagebox:
                     messagebox.showerror("Erro", f"Arquivo não encontrado: {descriptors_csv_path}")
                 return None
             
             # Lê os CSVs
-            self.log("📖 Lendo CSVs...")
+            self.log(" Lendo CSVs...")
             
             # Detecta separador do CSV de demografia
             with open(demographic_csv_path, 'r', encoding='utf-8') as f:
@@ -7007,22 +6448,22 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             
             # Lê CSV de demografia
             df_demographic = pd.read_csv(demographic_csv_path, sep=demographic_sep, encoding='utf-8')
-            self.log(f"   ✓ Demografia: {len(df_demographic)} registros, {len(df_demographic.columns)} colunas")
+            self.log(f"    Demografia: {len(df_demographic)} registros, {len(df_demographic.columns)} colunas")
             
             # Lê CSV de descritores (sempre usa ; como separador)
             df_descriptors = pd.read_csv(descriptors_csv_path, sep=';', encoding='utf-8')
-            self.log(f"   ✓ Descritores: {len(df_descriptors)} registros, {len(df_descriptors.columns)} colunas")
+            self.log(f"    Descritores: {len(df_descriptors)} registros, {len(df_descriptors.columns)} colunas")
             
             # Verifica se a coluna MRI ID existe em ambos
             if 'MRI ID' not in df_demographic.columns:
-                self.log("❌ Coluna 'MRI ID' não encontrada no CSV de demografia")
+                self.log(" Coluna 'MRI ID' não encontrada no CSV de demografia")
                 self.log(f"   Colunas disponíveis: {list(df_demographic.columns)}")
                 if show_messagebox:
                     messagebox.showerror("Erro", "Coluna 'MRI ID' não encontrada no CSV de demografia")
                 return None
             
             if 'MRI ID' not in df_descriptors.columns:
-                self.log("❌ Coluna 'MRI ID' não encontrada no CSV de descritores")
+                self.log(" Coluna 'MRI ID' não encontrada no CSV de descritores")
                 self.log(f"   Colunas disponíveis: {list(df_descriptors.columns)}")
                 if show_messagebox:
                     messagebox.showerror("Erro", "Coluna 'MRI ID' não encontrada no CSV de descritores")
@@ -7036,14 +6477,14 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             self.log("\n🔗 Fazendo merge baseado em 'MRI ID'...")
             merged_df = pd.merge(df_demographic, df_descriptors, on='MRI ID', how='inner')
             
-            self.log(f"   ✓ Merge concluído: {len(merged_df)} registros combinados")
-            self.log(f"   ✓ Colunas totais: {len(merged_df.columns)}")
+            self.log(f"    Merge concluído: {len(merged_df)} registros combinados")
+            self.log(f"    Colunas totais: {len(merged_df.columns)}")
             
             # Estatísticas do merge
-            self.log(f"\n📊 Estatísticas do merge:")
-            self.log(f"   • Registros no CSV demografia: {len(df_demographic)}")
-            self.log(f"   • Registros no CSV descritores: {len(df_descriptors)}")
-            self.log(f"   • Registros após merge: {len(merged_df)}")
+            self.log(f"\n Estatísticas do merge:")
+            self.log(f"   - Registros no CSV demografia: {len(df_demographic)}")
+            self.log(f"   - Registros no CSV descritores: {len(df_descriptors)}")
+            self.log(f"   - Registros após merge: {len(merged_df)}")
             
             # IDs que não foram combinados
             ids_demographic = set(df_demographic['MRI ID'].unique())
@@ -7054,12 +6495,12 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             ids_only_descriptors = ids_descriptors - ids_merged
             
             if ids_only_demographic:
-                self.log(f"   ⚠ IDs apenas em demografia (não combinados): {len(ids_only_demographic)}")
+                self.log(f"    IDs apenas em demografia (não combinados): {len(ids_only_demographic)}")
                 if len(ids_only_demographic) <= 10:
                     self.log(f"      {list(ids_only_demographic)}")
             
             if ids_only_descriptors:
-                self.log(f"   ⚠ IDs apenas em descritores (não combinados): {len(ids_only_descriptors)}")
+                self.log(f"    IDs apenas em descritores (não combinados): {len(ids_only_descriptors)}")
                 if len(ids_only_descriptors) <= 10:
                     self.log(f"      {list(ids_only_descriptors)}")
             
@@ -7067,7 +6508,7 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             # Usa o mesmo separador do CSV de demografia
             merged_df.to_csv(output_path, index=False, sep=demographic_sep, encoding='utf-8')
             
-            self.log(f"\n✅ CSV merged salvo: {output_path}")
+            self.log(f"\n CSV merged salvo: {output_path}")
             self.log(f"   Total de registros: {len(merged_df)}")
             self.log(f"   Total de colunas: {len(merged_df.columns)}")
             self.log("="*80 + "\n")
@@ -7085,274 +6526,13 @@ os descritores ventriculares isolados podem não ser suficientes para estimar id
             
         except Exception as e:
             error_msg = f"Erro ao fazer merge dos CSVs: {e}"
-            self.log(f"❌ {error_msg}")
+            self.log(f" {error_msg}")
             if show_messagebox:
                 messagebox.showerror("Erro", error_msg)
             import traceback
             self.log(traceback.format_exc())
             return None
 
-    def show_scatterplot_legacy(self):
-        """ Gera gráficos de dispersão (scatterplots). [cite: 81] - Método legado """
-        if self.features_df is None or self.dataframe is None:
-            messagebox.showwarning("Aviso", "Carregue o CSV e extraia características primeiro.")
-            self.log("Gere o DataFrame de features (self.features_df) primeiro.")
-            return
-
-        self.log("Gerando scatterplot...")
-
-        # TODO: Unir self.features_df com self.dataframe (CSV original)
-        # merged_df = pd.merge(self.dataframe, self.features_df, ...)
-        merged_df = None # Placeholder
-        
-        # Exemplo de dados (SUBSTITUIR PELO MERGED_DF)
-        # Você precisa ter um DataFrame com colunas: 'Area', 'Circularidade', 'Group'
-        # merged_df = ...
-        
-        # --- Placeholder ---
-        self.log("TODO: Implementar lógica de merge e plot.")
-        messagebox.showinfo("TODO", "Implementar merge do DataFrame de features com o CSV e plotar com Matplotlib.")
-        # --- Fim do Placeholder ---
-
-        # Exemplo de código de plotagem (quando 'merged_df' existir):
-        #
-        # feature1 = 'Area'
-        # feature2 = 'Circularidade'
-        #
-        # plt.figure(figsize=(8, 6))
-        #
-        # Cores [cite: 83]
-        # colors = {'Nondemented': 'blue', 'Demented': 'red', 'Converted': 'black'}
-        #
-        # for group, color in colors.items():
-        #     subset = merged_df[merged_df['Group'] == group]
-        #     plt.scatter(subset[feature1], subset[feature2], c=color, label=group, alpha=0.6)
-        #
-        # plt.xlabel(feature1)
-        # plt.ylabel(feature2)
-        # plt.title(f'{feature1} vs {feature2}')
-        # plt.legend()
-        # plt.grid(True)
-        # plt.show() # Abre em nova janela
-
-    # --- 5. FUNÇÕES DE MACHINE LEARNING ---
-
-    def prepare_data(self):
-        """ Prepara os dados para os modelos de ML/DL. [cite: 88-93] """
-        if self.dataframe is None:
-            self.log("Carregue o CSV primeiro.")
-            return None
-        
-        self.log("Preparando dados...")
-        
-        # 1. Criar a coluna 'Patient_ID' (o PDF não especifica, assumindo 'Subject ID' do CSV)
-        # Se o seu CSV tiver um ID de sujeito, use-o.
-        # Vamos assumir que o 'Subject ID' está no CSV.
-        if 'Subject ID' not in self.dataframe.columns:
-            self.log("ERRO: Coluna 'Subject ID' não encontrada no CSV. Necessária para divisão de pacientes.")
-            return None
-        
-        # 2. Ajustar classes (Item 9) [cite: 90]
-        # CUIDADO: Este apply() pode precisar de ajustes se 'CDR' tiver NaNs
-        def map_class(row):
-            if row['Group'] == 'Nondemented':
-                return 'NonDemented'
-            if row['Group'] == 'Demented':
-                return 'Demented'
-            if row['Group'] == 'Converted':
-                return 'Demented' if row['CDR'] > 0 else 'NonDemented'
-            return None
-        
-        df_copy = self.dataframe.copy()
-        df_copy['Target_Class'] = df_copy.apply(map_class, axis=1)
-        df_copy = df_copy.dropna(subset=['Target_Class']) # Remove linhas que não são de nenhuma classe
-        
-        # 3. Dividir em Treino/Teste (baseado em pacientes) [cite: 88, 93]
-        # 80% treino, 20% teste
-        gss = GroupShuffleSplit(n_splits=1, test_size=0.20, random_state=42)
-        patient_ids = df_copy['Subject ID']
-        groups = df_copy['Subject ID']
-        
-        # Garante divisão estratificada por classe [cite: 91]
-        # Isso é complexo com grupos. O GroupShuffleSplit não suporta 'stratify'
-        # A forma mais simples é estratificar os *pacientes*
-        # TODO: Implementar estratificação por paciente
-        
-        # Divisão simples por grupo:
-        train_idx, test_idx = next(gss.split(df_copy, groups=groups))
-        
-        train_patients = df_copy.iloc[train_idx]['Subject ID'].unique()
-        test_patients = df_copy.iloc[test_idx]['Subject ID'].unique()
-
-        train_df = df_copy[df_copy['Subject ID'].isin(train_patients)]
-        test_df = df_copy[df_copy['Subject ID'].isin(test_patients)]
-
-        # 4. Dividir Treino em Treino/Validação (Item 9) [cite: 92]
-        # 20% do treino vira validação
-        gss_val = GroupShuffleSplit(n_splits=1, test_size=0.20, random_state=42) # 20% de 80%
-        train_val_idx, val_idx = next(gss_val.split(train_df, groups=train_df['Subject ID']))
-        
-        val_df = train_df.iloc[val_idx]
-        train_df = train_df.iloc[train_val_idx] # Redefine o train_df
-
-        self.log(f"Dados divididos:")
-        self.log(f"  Pacientes de Treino: {len(train_df['Subject ID'].unique())}")
-        self.log(f"  Pacientes de Validação: {len(val_df['Subject ID'].unique())}")
-        self.log(f"  Pacientes de Teste: {len(test_df['Subject ID'].unique())}")
-
-        # TODO: Preparar X e y para os modelos
-        # X_train_features, y_train_class, y_train_age
-        # X_val_features, y_val_class, y_val_age
-        # X_test_features, y_test_class, y_test_age
-        
-        # Ex:
-        # features_list = ['Area', 'Circularidade', 'Excentricidade', 'Extensao', 'Solidez', 'DiamEquiv']
-        # features_list.extend(['Age', 'Educ', 'MMSE', 'eTIV', 'nWBV']) # Adiciona features do CSV
-        
-        # X_train = train_df[features_list]
-        # y_train_class = train_df['Target_Class'].map({'NonDemented': 0, 'Demented': 1})
-        # y_train_age = train_df['Age']
-        
-        # ... fazer o mesmo para val e test ...
-        
-        # ... escalar os dados (StandardScaler) ...
-
-        return # train_data, val_data, test_data (retorne os dataframes ou arrays)
-
-    def run_shallow_classifier(self):
-        """ Classificador Raso: XGBoost [cite: 55, 94] """
-        self.log("Iniciando Classificador Raso (XGBoost)...")
-        messagebox.showinfo("TODO", "Carregar dados das features (X) e classes (y), treinar o XGBClassifier e mostrar métricas.")
-
-        # TODO:
-        # 1. Chamar self.prepare_data() para obter X_train, y_train, X_test, y_test
-        #    (usando as features extraídas)
-        # 2. Escalar os dados (StandardScaler)
-        # 3. Treinar o modelo:
-        #    model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
-        #    model.fit(X_train_scaled, y_train)
-        # 4. Fazer predições:
-        #    y_pred = model.predict(X_test_scaled)
-        # 5. Calcular e logar métricas[cite: 95]:
-        #    acc = accuracy_score(y_test, y_pred)
-        #    cm = confusion_matrix(y_test, y_pred)
-        #    report = classification_report(y_test, y_pred, target_names=['NonDemented', 'Demented'])
-        #    self.log(f"--- XGBoost (Shallow) ---")
-        #    self.log(f"Acurácia: {acc:.4f}")
-        #    self.log(f"Matriz de Confusão:\n{cm}")
-        #    self.log(f"Relatório:\n{report}")
-        pass
-
-    def run_shallow_regressor(self):
-        """ Regressor Raso: Regressão Linear [cite: 54, 99] """
-        self.log("Iniciando Regressor Raso (Linear)...")
-        messagebox.showinfo("TODO", "Carregar dados das features (X) e idade (y), treinar o LinearRegression e mostrar métricas.")
-
-        # TODO:
-        # 1. Chamar self.prepare_data() para obter X_train, y_train_age, X_test, y_test_age
-        #    (usando as features extraídas + features do CSV)
-        # 2. Escalar os dados (StandardScaler)
-        # 3. Treinar o modelo:
-        #    model = LinearRegression()
-        #    model.fit(X_train_scaled, y_train_age)
-        # 4. Fazer predições:
-        #    y_pred_age = model.predict(X_test_scaled)
-        # 5. Calcular e logar métricas:
-        #    mse = mean_squared_error(y_test_age, y_pred_age)
-        #    r2 = r2_score(y_test_age, y_pred_age)
-        #    self.log(f"--- Regressão Linear (Shallow) ---")
-        #    self.log(f"MSE (Erro Quadrático Médio): {mse:.2f}")
-        #    self.log(f"R2 Score: {r2:.4f}")
-        # 6. Analisar resultados [cite: 101, 102]
-        #    (Ex: plotar y_test_age vs y_pred_age)
-        pass
-
-    def run_deep_classifier(self):
-        """ Classificador Profundo: ResNet50 [cite: 57, 96] """
-        self.log("Iniciando Classificador Profundo (ResNet50)...")
-        messagebox.showinfo("TODO", "Implementar o pipeline de dados de imagem, criar o modelo ResNet50 e treiná-lo.")
-
-        # TODO: Esta é a função MAIS COMPLEXA.
-        # 1. Obter os dataframes de treino/val/teste de self.prepare_data()
-        # 2. Criar um pipeline de dados (ex: tf.keras.preprocessing.image.ImageDataGenerator
-        #    ou um tf.data.Dataset) que leia as *imagens* do disco.
-        #    - Você precisará de uma coluna no seu DF que tenha o caminho da imagem.
-        #    - As imagens precisam ser redimensionadas para o ResNet50 (ex: 224x224)
-        #      e convertidas para 3 canais (RGB), já que o ResNet50 espera 3 canais.
-        #      (img_rgb = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2RGB))
-        
-        # 3. Criar o modelo:
-        #    img_shape = (224, 224, 3)
-        #    base_model = ResNet50(weights='imagenet', include_top=False,
-        #                          input_tensor=Input(shape=img_shape))
-        #
-        #    # Congelar o modelo base (para fine-tuning) [cite: 97]
-        #    base_model.trainable = False
-        #
-        #    # Adicionar camadas no topo
-        #    x = base_model.output
-        #    x = GlobalAveragePooling2D()(x)
-        #    x = Dense(128, activation='relu')(x)
-        #    # Saída binária (Demented/NonDemented)
-        #    predictions = Dense(1, activation='sigmoid')(x)
-        #
-        #    model = Model(inputs=base_model.input, outputs=predictions)
-        
-        # 4. Compilar o modelo:
-        #    model.compile(optimizer=Adam(learning_rate=1e-4),
-        #                  loss='binary_crossentropy',
-        #                  metrics=['accuracy'])
-
-        # 5. Treinar o modelo:
-        #    history = model.fit(train_generator,
-        #                        validation_data=val_generator,
-        #                        epochs=10) # Ajustar épocas
-
-        # 6. (Opcional) Fazer fine-tuning:
-        #    base_model.trainable = True # Descongelar
-        #    # ... re-compilar com LR baixo e treinar por mais algumas épocas ...
-        
-        # 7. Plotar gráficos de aprendizado [cite: 98]
-        #    plt.plot(history.history['accuracy'], label='Train Acc')
-        #    plt.plot(history.history['val_accuracy'], label='Val Acc')
-        #    ...
-        
-        # 8. Avaliar no conjunto de teste [cite: 95]
-        #    y_pred_probs = model.predict(test_generator)
-        #    y_pred = (y_pred_probs > 0.5).astype(int)
-        #    ... calcular métricas ...
-        pass
-
-    def run_deep_regressor(self):
-        """ Regressor Profundo: ResNet50 [cite: 57, 100] """
-        self.log("Iniciando Regressor Profundo (ResNet50)...")
-        messagebox.showinfo("TODO", "Implementar o pipeline de dados de imagem, criar o modelo ResNet50 para regressão e treiná-lo.")
-
-        # TODO:
-        # 1. Similar ao 'run_deep_classifier', mas o pipeline de dados
-        #    deve ter (imagem, idade) em vez de (imagem, classe).
-        #
-        # 2. A arquitetura do modelo muda na última camada:
-        #    ...
-        #    x = GlobalAveragePooling2D()(x)
-        #    x = Dense(128, activation='relu')(x)
-        #    # Saída de regressão (idade) - 1 neurônio, ativação linear
-        #    predictions = Dense(1, activation='linear')(x)
-        #
-        #    model = Model(inputs=base_model.input, outputs=predictions)
-        
-        # 3. Compilação diferente:
-        #    model.compile(optimizer=Adam(learning_rate=1e-4),
-        #                  loss='mean_squared_error', # Loss de regressão
-        #                  metrics=['mae']) # Métrica (Mean Absolute Error)
-
-        # 4. Treinar e avaliar.
-        
-        # 5. Analisar resultados [cite: 101, 102]
-        #    - As entradas (só imagem) são suficientes?
-        #    - Exames posteriores resultam em idades maiores?
-        #      (Pegar predições do test_df, ordenar por 'Subject ID' e 'Visit' e verificar)
-        pass
 
 ################################################################################
 # --- 6. EXECUÇÃO DA APLICAÇÃO ---
