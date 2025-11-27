@@ -2268,114 +2268,23 @@ class AlzheimerApp:
                 
                 if len(img_data.shape) == 3:
                     central_slice_idx = img_data.shape[2] // 2
-                    
-                    if num_slices == 3:
-                        slice_indices = [
-                            max(0, central_slice_idx - 2),
-                            central_slice_idx,
-                            min(img_data.shape[2] - 1, central_slice_idx + 2)
-                        ]
-                        slices = [img_data[:, :, idx] for idx in slice_indices]
-                    elif num_slices == 5:
-                        slice_indices = [
-                            max(0, central_slice_idx - 4),
-                            max(0, central_slice_idx - 2),
-                            central_slice_idx,
-                            min(img_data.shape[2] - 1, central_slice_idx + 2),
-                            min(img_data.shape[2] - 1, central_slice_idx + 4)
-                        ]
-                        slices = [img_data[:, :, idx] for idx in slice_indices]
-                    else:
-                        slice_idx = img_data.shape[2] // 2
-                        img_data = img_data[:, :, slice_idx]
-                        slices = [img_data]
-                    
-                    normalized_slices = []
-                    for slice_data in slices:
-                        p1 = np.percentile(slice_data, 1)
-                        p99 = np.percentile(slice_data, 99)
-                        if p99 > p1:
-                            slice_norm = np.clip(slice_data, p1, p99)
-                            slice_norm = (slice_norm - p1) / (p99 - p1 + 1e-8)
-                        else:
-                            slice_min = np.min(slice_data)
-                            slice_max = np.max(slice_data)
-                            if slice_max > slice_min:
-                                slice_norm = (slice_data - slice_min) / (slice_max - slice_min + 1e-8)
-                            else:
-                                slice_norm = np.zeros_like(slice_data)
-                        normalized_slices.append(slice_norm)
-                    
-                    if len(normalized_slices) == 5:
-                        img_data = np.stack([normalized_slices[0], normalized_slices[2], normalized_slices[4]], axis=-1)
-                    else:
-                        img_data = np.stack(normalized_slices, axis=-1)
-                elif len(img_data.shape) == 2:
-                    pass
-                else:
+                    img_data = img_data[:, :, central_slice_idx]
+                
+                if len(img_data.shape) != 2:
                     print(f"  Aviso: Formato NIfTI não suportado (dimensões: {img_data.shape})")
                     return None
                 
-                if len(img_data.shape) == 2:
-                    p1 = np.percentile(img_data, 1)
-                    p99 = np.percentile(img_data, 99)
-                    if p99 > p1:
-                        img_data = np.clip(img_data, p1, p99)
-                        img_data = (img_data - p1) / (p99 - p1 + 1e-8)
-                    else:
-                        img_min = np.min(img_data)
-                        img_max = np.max(img_data)
-                        if img_max > img_min:
-                            img_data = (img_data - img_min) / (img_max - img_min + 1e-8)
-                        else:
-                            img_data = np.zeros_like(img_data)
-                    img_data = np.stack([img_data, img_data, img_data], axis=-1)
-                elif len(img_data.shape) == 3 and img_data.shape[2] != 3:
-                    p1 = np.percentile(img_data, 1)
-                    p99 = np.percentile(img_data, 99)
-                    if p99 > p1:
-                        img_data = np.clip(img_data, p1, p99)
-                        img_data = (img_data - p1) / (p99 - p1 + 1e-8)
-                    else:
-                        img_min = np.min(img_data)
-                        img_max = np.max(img_data)
-                        if img_max > img_min:
-                            img_data = (img_data - img_min) / (img_max - img_min + 1e-8)
-                        else:
-                            img_data = np.zeros_like(img_data)
-                    img_data = np.stack([img_data, img_data, img_data], axis=-1)
+                img_min = np.min(img_data)
+                img_max = np.max(img_data)
+                if img_max > img_min:
+                    img_data = (img_data - img_min) / (img_max - img_min + 1e-8)
                 else:
-                    pass
+                    img_data = np.zeros_like(img_data)
                 
-                p1 = np.percentile(img_data, 1)
-                p99 = np.percentile(img_data, 99)
-                if p99 > p1:
-                    img_data = np.clip(img_data, p1, p99)
-                    img_data = (img_data - p1) / (p99 - p1 + 1e-8)
-                else:
-                    img_min = np.min(img_data)
-                    img_max = np.max(img_data)
-                    if img_max > img_min:
-                        img_data = (img_data - img_min) / (img_max - img_min + 1e-8)
-                    else:
-                        img_data = np.zeros_like(img_data)
-                
-                if img_data.shape[2] == 3:
-                    resized_channels = []
-                    for c in range(3):
-                        img_2d = img_data[:, :, c]
-                        img_pil = Image.fromarray((img_2d * 255).astype(np.uint8), mode='L')
-                        img_pil = img_pil.resize(target_size, Image.Resampling.LANCZOS)
-                        resized_channels.append(np.array(img_pil).astype(np.float32) / 255.0)
-                    img_data = np.stack(resized_channels, axis=-1)
-                else:
-                    img_2d = img_data[:, :, 0] if len(img_data.shape) == 3 else img_data
-                    img_pil = Image.fromarray((img_2d * 255).astype(np.uint8), mode='L')
-                    img_pil = img_pil.resize(target_size, Image.Resampling.LANCZOS)
-                    img_resized = np.array(img_pil).astype(np.float32) / 255.0
-                    img_data = np.stack([img_resized, img_resized, img_resized], axis=-1)
-                
-                img_array = img_data.astype(np.float32)
+                img_pil = Image.fromarray((img_data * 255).astype(np.uint8), mode='L')
+                img_pil = img_pil.resize(target_size, Image.Resampling.LANCZOS)
+                img_resized = np.array(img_pil).astype(np.float32) / 255.0
+                img_array = np.stack([img_resized, img_resized, img_resized], axis=-1)
                 
                 if use_preprocess_input:
                     img_array = (img_array * 255.0).astype(np.uint8)
