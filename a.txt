@@ -1,0 +1,39 @@
+10. Fine-tuning...
+   Aviso: Não foi possível encontrar o ResNet50!
+   Pulando estágio B e usando modelo do estágio A...
+   Aviso: AUC não encontrada no histórico, calculando a partir das predições...
+   AUC calculada: 0.5007
+
+11. Gerando gráfico de aprendizado...
+   Salvo: learning_curve_resnet50.png
+
+11. Encontrando threshold ótimo usando precision_recall_curve...
+   Maximizando F1 ou balanced accuracy (não só acurácia)...
+   Threshold ótimo (F1): 0.4796 (score=0.5974)
+   Métricas na validação com threshold ótimo:
+     - Sensibilidade: 1.0000
+     - Especificidade: 0.0606
+     - Balanced Accuracy: 0.5303
+     - F1-Score: 0.5974
+
+12. Gerando curvas ROC e Precision-Recall na validação...
+   Salvo: roc_pr_curves_resnet50.png
+   AUC-ROC na validação: 0.5007
+   AUC-PR na validação: 0.4558
+
+13. Avaliando no conjunto de teste com threshold ótimo...
+   Threshold usado: 0.4796 (encontrado na validação)
+   Salvo: confusion_resnet50.png
+Threshold usado: 0.4796 (ótimo encontrado na validação)
+Acurácia: 0.4231 (42.31%)
+Balanced Accuracy: 0.4960 (49.60%)
+Sensibilidade (Recall Demented): 0.9697 (96.97%)
+Especificidade: 0.0222 (2.22%)
+Precisão (Precision): 0.4211 (42.11%)
+F1-Score: 0.5872 (58.72%)
+AUC: 0.5259
+
+Confusion Matrix:
+[[   1   44]
+ [   1   32]]
+======================================================================

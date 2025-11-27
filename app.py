@@ -123,8 +123,16 @@ class AlzheimerApp:
         
         self.split_dataframe = None
         
-        self.metrics_raso = {'mae': None, 'rmse': None, 'r2': None}
-        self.metrics_profundo = {'mae': None, 'rmse': None, 'r2': None}
+        self.metrics = {
+            'classifiers': {
+                'xgb': {'accuracy': None, 'sensitivity': None, 'specificity': None, 'f1': None, 'auc': None},
+                'resnet50': {'accuracy': None, 'sensitivity': None, 'specificity': None, 'f1': None, 'auc': None}
+            },
+            'regressors': {
+                'raso': {'mae': None, 'rmse': None, 'r2': None},
+                'profundo': {'mae': None, 'rmse': None, 'r2': None}
+            }
+        }
         
         self.filter_params = {
             'clahe_clip_limit': 2.0,
@@ -1163,13 +1171,22 @@ class AlzheimerApp:
         main_frame_p12 = ttk.Frame(parte12_tab)
         main_frame_p12.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        ttk.Label(main_frame_p12, text="Parte 12 - Comparação entre Regressores", 
+        ttk.Label(main_frame_p12, text="Parte 12 - Comparação de Resultados", 
                  font=("Arial", 14, "bold"), foreground="darkblue").pack(pady=10)
         
         ttk.Label(main_frame_p12, 
-                 text="Compare os resultados obtidos entre o regressor raso e profundo.\n"
-                      "Execute ambos os treinamentos na Parte 11 antes de gerar a comparação.",
+                 text="Compare os resultados obtidos entre os modelos.\n"
+                      "Execute os treinamentos nas Partes 10 e 11 antes de gerar a comparação.",
                  wraplength=700).pack(pady=5)
+        
+        comparison_type_frame = ttk.LabelFrame(main_frame_p12, text="Tipo de Comparação", padding="10")
+        comparison_type_frame.pack(fill=tk.X, pady=10, padx=10)
+        
+        self.comparison_type = tk.StringVar(value="regressors")
+        ttk.Radiobutton(comparison_type_frame, text="Classificadores (XGBoost vs ResNet50)", 
+                       variable=self.comparison_type, value="classifiers").pack(anchor=tk.W, pady=2)
+        ttk.Radiobutton(comparison_type_frame, text="Regressores (Raso vs Profundo)", 
+                       variable=self.comparison_type, value="regressors").pack(anchor=tk.W, pady=2)
         
         ttk.Separator(main_frame_p12, orient='horizontal').pack(fill=tk.X, pady=20)
         
@@ -1210,10 +1227,9 @@ class AlzheimerApp:
         
         self.text_results_p12.insert(tk.END, "Aguardando geração da comparação...\n\n")
         self.text_results_p12.insert(tk.END, "Para gerar a comparação:\n")
-        self.text_results_p12.insert(tk.END, "1. Vá para a Parte 11\n")
-        self.text_results_p12.insert(tk.END, "2. Treine o Regressor Raso\n")
-        self.text_results_p12.insert(tk.END, "3. Treine o Regressor Profundo\n")
-        self.text_results_p12.insert(tk.END, "4. Volte aqui e clique em 'Gerar Comparação'\n")
+        self.text_results_p12.insert(tk.END, "1. Execute os treinamentos nas Partes 10 e 11\n")
+        self.text_results_p12.insert(tk.END, "2. Selecione o tipo de comparação acima\n")
+        self.text_results_p12.insert(tk.END, "3. Clique em 'Gerar Comparação'\n")
         self.text_results_p12.config(state=tk.DISABLED)
     
     def train_shallow_regressor_p11(self):
@@ -1241,9 +1257,11 @@ class AlzheimerApp:
             
             if result and len(result) == 4:
                 _, test_mae, test_rmse, test_r2 = result
-                self.metrics_raso['mae'] = test_mae
-                self.metrics_raso['rmse'] = test_rmse
-                self.metrics_raso['r2'] = test_r2
+                self.metrics['regressors']['raso'] = {
+                    'mae': test_mae,
+                    'rmse': test_rmse,
+                    'r2': test_r2
+                }
             
             output = buffer.getvalue()
             sys.stdout = old_stdout
@@ -1296,9 +1314,11 @@ class AlzheimerApp:
             
             if result and len(result) == 4:
                 _, test_mae, test_rmse, test_r2 = result
-                self.metrics_profundo['mae'] = test_mae
-                self.metrics_profundo['rmse'] = test_rmse
-                self.metrics_profundo['r2'] = test_r2
+                self.metrics['regressors']['profundo'] = {
+                    'mae': test_mae,
+                    'rmse': test_rmse,
+                    'r2': test_r2
+                }
             
             output = buffer.getvalue()
             sys.stdout = old_stdout
@@ -1324,23 +1344,41 @@ class AlzheimerApp:
             traceback.print_exc()
     
     def gerar_comparacao_resultados(self):
-        """Gera a comparação entre regressores raso e profundo"""
-        mae_raso = self.metrics_raso.get('mae')
-        rmse_raso = self.metrics_raso.get('rmse')
-        r2_raso = self.metrics_raso.get('r2')
+        """Gera a comparação dinâmica entre modelos"""
+        comparison_type = self.comparison_type.get()
         
-        mae_prof = self.metrics_profundo.get('mae')
-        rmse_prof = self.metrics_profundo.get('rmse')
-        r2_prof = self.metrics_profundo.get('r2')
-        
-        if mae_raso is None or mae_prof is None:
-            messagebox.showwarning(
-                "Aviso", 
-                "Execute o treinamento de ambos os regressores na Parte 11 antes de gerar a comparação."
-            )
+        if comparison_type == "regressors":
+            m1_metrics = self.metrics['regressors']['raso']
+            m2_metrics = self.metrics['regressors']['profundo']
+            m1_name = "Regressor Raso (Linear Regression)"
+            m2_name = "Regressor Profundo (ResNet50)"
+            
+            if m1_metrics.get('mae') is None or m2_metrics.get('mae') is None:
+                messagebox.showwarning(
+                    "Aviso", 
+                    "Execute o treinamento de ambos os regressores na Parte 11 antes de gerar a comparação."
+                )
+                return
+            
+            texto = self.gerar_texto_comparacao_regressores(m1_metrics, m2_metrics, m1_name, m2_name)
+            
+        elif comparison_type == "classifiers":
+            m1_metrics = self.metrics['classifiers']['xgb']
+            m2_metrics = self.metrics['classifiers']['resnet50']
+            m1_name = "Classificador Raso (XGBoost)"
+            m2_name = "Classificador Profundo (ResNet50)"
+            
+            if m1_metrics.get('accuracy') is None or m2_metrics.get('accuracy') is None:
+                messagebox.showwarning(
+                    "Aviso", 
+                    "Execute o treinamento de ambos os classificadores na Parte 10 antes de gerar a comparação."
+                )
+                return
+            
+            texto = self.gerar_texto_comparacao_classificadores(m1_metrics, m2_metrics, m1_name, m2_name)
+        else:
+            messagebox.showerror("Erro", "Tipo de comparação inválido!")
             return
-        
-        texto = self.gerar_texto_resultados(mae_raso, rmse_raso, r2_raso, mae_prof, rmse_prof, r2_prof)
         
         self.text_results_p12.config(state=tk.NORMAL)
         self.text_results_p12.delete(1.0, tk.END)
@@ -1349,10 +1387,18 @@ class AlzheimerApp:
         
         self.lbl_status_p12.config(text="Comparação gerada com sucesso!", foreground="green")
     
-    def gerar_texto_resultados(self, mae_raso, rmse_raso, r2_raso, mae_prof, rmse_prof, r2_prof):
+    def gerar_texto_comparacao_regressores(self, m1_metrics, m2_metrics, m1_name, m2_name):
+        """Gera o texto de comparação entre regressores"""
+        mae_raso = m1_metrics.get('mae')
+        rmse_raso = m1_metrics.get('rmse')
+        r2_raso = m1_metrics.get('r2')
+        
+        mae_prof = m2_metrics.get('mae')
+        rmse_prof = m2_metrics.get('rmse')
+        r2_prof = m2_metrics.get('r2')
         """Gera o texto de comparação entre os regressores"""
         texto = "="*80 + "\n"
-        texto += "PARTE 12 - COMPARAÇÃO ENTRE AS SOLUÇÕES DE REGRESSÃO DE IDADE\n"
+        texto += "PARTE 12 - COMPARAÇÃO ENTRE REGRESSORES\n"
         texto += "="*80 + "\n\n"
         
         texto += "EXPLICAÇÃO DAS MÉTRICAS\n"
@@ -1379,12 +1425,12 @@ class AlzheimerApp:
         texto += "RESULTADOS OBTIDOS\n"
         texto += "="*80 + "\n\n"
         
-        texto += "REGRESSOR RASO (Regressão Linear):\n"
+        texto += f"{m1_name}:\n"
         texto += f"  • MAE:  {mae_raso:.2f} anos\n"
         texto += f"  • RMSE: {rmse_raso:.2f} anos\n"
         texto += f"  • R²:   {r2_raso:.4f}\n\n"
         
-        texto += "REGRESSOR PROFUNDO (ResNet50):\n"
+        texto += f"{m2_name}:\n"
         texto += f"  • MAE:  {mae_prof:.2f} anos\n"
         texto += f"  • RMSE: {rmse_prof:.2f} anos\n"
         texto += f"  • R²:   {r2_prof:.4f}\n\n"
@@ -1394,12 +1440,12 @@ class AlzheimerApp:
         texto += "="*80 + "\n\n"
         
         if mae_raso < mae_prof:
-            melhor = "Regressor RASO"
+            melhor = m1_name
             diff_mae = mae_prof - mae_raso
             texto += f"→ O {melhor} obteve MELHOR desempenho em MAE.\n"
             texto += f"  Diferença: {diff_mae:.2f} anos a menos de erro médio.\n\n"
         elif mae_prof < mae_raso:
-            melhor = "Regressor PROFUNDO"
+            melhor = m2_name
             diff_mae = mae_raso - mae_prof
             texto += f"→ O {melhor} obteve MELHOR desempenho em MAE.\n"
             texto += f"  Diferença: {diff_mae:.2f} anos a menos de erro médio.\n\n"
@@ -1407,9 +1453,9 @@ class AlzheimerApp:
             texto += "→ Ambos os modelos obtiveram desempenho IDÊNTICO em MAE.\n\n"
         
         if rmse_raso < rmse_prof:
-            melhor_rmse = "Regressor RASO"
+            melhor_rmse = m1_name
         elif rmse_prof < rmse_raso:
-            melhor_rmse = "Regressor PROFUNDO"
+            melhor_rmse = m2_name
         else:
             melhor_rmse = "Empate"
         
@@ -1417,9 +1463,9 @@ class AlzheimerApp:
             texto += f"→ O {melhor_rmse} também foi melhor em RMSE.\n"
         
         if r2_raso > r2_prof:
-            texto += f"→ O Regressor RASO explica melhor a variação da idade (R² maior).\n\n"
+            texto += f"→ O {m1_name} explica melhor a variação da idade (R² maior).\n\n"
         elif r2_prof > r2_raso:
-            texto += f"→ O Regressor PROFUNDO explica melhor a variação da idade (R² maior).\n\n"
+            texto += f"→ O {m2_name} explica melhor a variação da idade (R² maior).\n\n"
         else:
             texto += f"→ Ambos explicam igualmente a variação da idade.\n\n"
         
@@ -1431,7 +1477,7 @@ class AlzheimerApp:
         texto += "   relativamente pequeno, especialmente para o regressor profundo (ResNet50),\n"
         texto += "   que idealmente se beneficia de milhares ou dezenas de milhares de imagens.\n\n"
         
-        texto += "2. REGRESSOR RASO (Linear Regression):\n"
+        texto += f"2. {m1_name}:\n"
         texto += "   • Entrada: apenas descritores morfológicos dos ventrículos (área, perímetro,\n"
         texto += "     excentricidade, solidez, extensão).\n"
         texto += "   • Esses descritores podem NÃO capturar toda a variação da idade.\n"
@@ -1440,7 +1486,7 @@ class AlzheimerApp:
         texto += "     e não apenas aos ventrículos.\n"
         texto += "   • Vantagem: modelo simples, interpretável e rápido.\n\n"
         
-        texto += "3. REGRESSOR PROFUNDO (ResNet50):\n"
+        texto += f"3. {m2_name}:\n"
         texto += "   • Utiliza transfer learning de pesos treinados no ImageNet (fotos naturais).\n"
         texto += "   • Grande diferença de domínio: ImageNet contém imagens RGB coloridas\n"
         texto += "     (animais, objetos, cenas), enquanto MRI são imagens médicas em tons de\n"
@@ -2568,6 +2614,14 @@ class AlzheimerApp:
         print(f" [{fn:4d} {tp:4d}]]  <- Demented")
         print("="*70 + "\n")
         
+        self.metrics['classifiers']['xgb'] = {
+            'accuracy': accuracy,
+            'sensitivity': sensitivity,
+            'specificity': specificity,
+            'f1': None,
+            'auc': None
+        }
+        
         return model, accuracy, sensitivity, specificity
     
     def focal_loss_binary(self, alpha=0.75, gamma=2.0):
@@ -2791,7 +2845,6 @@ class AlzheimerApp:
                 print("   Por favor, ajuste a variável 'base_image_dir' no código.")
                 return None
         
-        # Preparar dados de treino
         print("\n2. Preparando dados de treino...")
         X_train = []
         y_train = []
@@ -2802,19 +2855,16 @@ class AlzheimerApp:
         for idx, row in train_df.iterrows():
             img_path = self.get_image_path_p10(row, train_df, base_image_dir)
             if img_path and os.path.exists(img_path):
-                # Verificar se é arquivo NIfTI
                 is_nii = img_path.endswith(('.nii', '.nii.gz'))
                 if is_nii:
                     nii_count += 1
                 else:
                     other_count += 1
                 
-                # Usar 1 slice axial central para NIfTI (conforme solicitado)
-                num_slices = 1  # Slice axial central apenas
+                num_slices = 1
                 img = self.load_and_preprocess_image_p10(img_path, num_slices=num_slices)
                 if img is not None:
                     X_train.append(img)
-                    # Verificar consistência de rótulos
                     class_binary = str(row['ClassBinary']).strip()
                     label = 1 if class_binary == 'Demented' else 0
                     y_train.append(label)
@@ -2827,7 +2877,6 @@ class AlzheimerApp:
         if other_count > 0:
             print(f"   Outros formatos encontrados: {other_count}")
         
-        # Preparar dados de validação
         print("\n3. Preparando dados de validação...")
         X_val = []
         y_val = []
@@ -2835,17 +2884,14 @@ class AlzheimerApp:
         for idx, row in val_df.iterrows():
             img_path = self.get_image_path_p10(row, val_df, base_image_dir)
             if img_path and os.path.exists(img_path):
-                # Usar 1 slice axial central para NIfTI (conforme solicitado)
-                num_slices = 1  # Slice axial central apenas
+                num_slices = 1
                 img = self.load_and_preprocess_image_p10(img_path, num_slices=num_slices)
                 if img is not None:
                     X_val.append(img)
-                    # Verificar consistência de rótulos
                     class_binary = str(row['ClassBinary']).strip()
                     label = 1 if class_binary == 'Demented' else 0
                     y_val.append(label)
         
-        # Preparar dados de teste
         print("\n4. Preparando dados de teste...")
         X_test = []
         y_test = []
@@ -2853,12 +2899,10 @@ class AlzheimerApp:
         for idx, row in test_df.iterrows():
             img_path = self.get_image_path_p10(row, test_df, base_image_dir)
             if img_path and os.path.exists(img_path):
-                # Usar 1 slice axial central para NIfTI (conforme solicitado)
-                num_slices = 1  # Slice axial central apenas
+                num_slices = 1
                 img = self.load_and_preprocess_image_p10(img_path, num_slices=num_slices)
                 if img is not None:
                     X_test.append(img)
-                    # Verificar consistência de rótulos
                     class_binary = str(row['ClassBinary']).strip()
                     label = 1 if class_binary == 'Demented' else 0
                     y_test.append(label)
@@ -2880,18 +2924,15 @@ class AlzheimerApp:
         y_val = np.array(y_val)
         y_test = np.array(y_test)
         
-        # Verificar distribuição de classes
         train_demented = np.sum(y_train == 1)
         train_nondemented = np.sum(y_train == 0)
         print(f"\n5. Distribuição de classes no treino (ANTES de oversampling):")
         print(f"   Demented: {train_demented} ({100*train_demented/len(y_train):.1f}%)")
         print(f"   NonDemented: {train_nondemented} ({100*train_nondemented/len(y_train):.1f}%)")
         
-        # IMPLEMENTAR OVERSAMPLING para balancear batches
         print("\n6. Aplicando oversampling para balancear classes...")
         from sklearn.utils import resample
         
-        # Separar por classe
         X_train_demented = X_train[y_train == 1]
         y_train_demented = y_train[y_train == 1]
         X_train_nondemented = X_train[y_train == 0]
@@ -2906,7 +2947,6 @@ class AlzheimerApp:
                 random_state=42
             )
             print(f"   Oversampling Demented: {len(X_train_demented)} -> {len(X_train_demented_oversampled)}")
-            # Combinar
             X_train = np.concatenate([X_train_nondemented, X_train_demented_oversampled], axis=0)
             y_train = np.concatenate([y_train_nondemented, y_train_demented_oversampled], axis=0)
         else:
@@ -2928,36 +2968,21 @@ class AlzheimerApp:
         print(f"   Demented: {train_demented_after} ({100*train_demented_after/len(y_train):.1f}%)")
         print(f"   NonDemented: {train_nondemented_after} ({100*train_nondemented_after/len(y_train):.1f}%)")
         
-        # Class weight reduzido (já que usamos oversampling)
-        class_weight_dict = {0: 1.0, 1: 1.5}  # Reduzido de 2.5 para 1.5
-        print(f"\n7. Class weights (reduzido devido ao oversampling): {class_weight_dict}")
+        class_weight_dict = {0: 1.0, 1: 1.5}
+        print(f"\n7. Class weights: {class_weight_dict}")
         
-        # Criar modelo com head: GlobalAveragePooling2D -> Dense(256, relu, l2(1e-4)) -> Dropout(0.5) -> Dense(1, sigmoid)
-        print("\n8. Criando modelo ResNet50 (Estágio 1: backbone congelado)...")
-        print("   Head: GlobalAveragePooling2D -> Dense(256, relu, l2(1e-4)) -> Dropout(0.5) -> Dense(1, sigmoid)")
-        print("   Data augmentation: rotação ±10°, zoom/shift pequenos, brilho/contraste leve, ruído gaussiano")
+        print("\n8. Criando modelo ResNet50...")
         model = self.create_resnet50_model_p10(
-            dropout_rate=0.5,  # Dropout 0.5 conforme solicitado
+            dropout_rate=0.5,
             dense_units=256,
             freeze_backbone=True,
             unfreeze_layers=40,
             use_augmentation=True
         )
         
-        # Testar duas losses: Focal Loss e BinaryCrossentropy com label smoothing
-        print("\n9. Configurando losses para comparar:")
-        focal_loss = self.focal_loss_binary(alpha=0.75, gamma=2.5)  # gamma entre 2-3
-        from tensorflow.keras.losses import BinaryCrossentropy
-        bce_label_smooth = BinaryCrossentropy(label_smoothing=0.05)
-        
-        # Usar Focal Loss inicialmente (pode comparar depois)
+        focal_loss = self.focal_loss_binary(alpha=0.75, gamma=2.5)
         loss_to_use = focal_loss
-        loss_name = "Focal Loss (alpha=0.75, gamma=2.5)"
-        print(f"   Usando: {loss_name}")
-        print("   (Alternativa disponível: BinaryCrossentropy com label_smoothing=0.05)")
         
-        # MELHORIA 3: Compilar com métricas: accuracy, AUC, Recall, Precision
-        # Criar métricas customizadas para Recall e Precision
         def recall_metric(y_true, y_pred):
             y_true = tf.cast(y_true, tf.float32)
             y_pred = tf.cast(y_pred, tf.float32)
@@ -2974,28 +2999,7 @@ class AlzheimerApp:
             fp = tf.reduce_sum((1 - y_true) * y_pred_binary)
             return tp / (tp + fp + tf.keras.backend.epsilon())
         
-        # ESTÁGIO 1: Treinar apenas o head (backbone congelado)
-        print("\n10. ESTÁGIO 1: Treinando apenas o head (backbone congelado)...")
-        print(f"   Loss: {loss_name}")
-        print("   Learning rate: 1e-4, epochs: 5-8, batch_size: 8")
-        print("   Métricas: accuracy, AUC, Recall, Precision")
-        
-        # Criar métricas customizadas para Recall e Precision
-        def recall_metric(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            y_pred_binary = tf.cast(y_pred > 0.5, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred_binary)
-            fn = tf.reduce_sum(y_true * (1 - y_pred_binary))
-            return tp / (tp + fn + tf.keras.backend.epsilon())
-        
-        def precision_metric(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            y_pred_binary = tf.cast(y_pred > 0.5, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred_binary)
-            fp = tf.reduce_sum((1 - y_true) * y_pred_binary)
-            return tp / (tp + fp + tf.keras.backend.epsilon())
+        print("\n9. Treinando modelo...")
         
         model.compile(
             optimizer=Adam(learning_rate=1e-4),
@@ -3003,7 +3007,6 @@ class AlzheimerApp:
             metrics=['accuracy', 'AUC', recall_metric, precision_metric]
         )
         
-        # Early stopping monitorando val_auc
         early_stopping_a = EarlyStopping(
             monitor='val_auc',
             patience=5,
@@ -3020,23 +3023,18 @@ class AlzheimerApp:
             verbose=1
         )
         
-        # Treinar Estágio 1
         history_a = model.fit(
             X_train, y_train,
             validation_data=(X_val, y_val),
-            epochs=8,  # 5-8 épocas conforme solicitado
+            epochs=8,
             batch_size=8,
-            class_weight=class_weight_dict,  # Class weight reduzido (oversampling já balanceou)
+            class_weight=class_weight_dict,
             callbacks=[early_stopping_a, reduce_lr_a],
             verbose=1
         )
         
-        # MELHORIA 5: ESTÁGIO B - Descongelar últimas 30-50 camadas
-        print("\n9. ESTÁGIO B: Descongelando últimas 40 camadas para fine-tuning...")
-        print("   Learning rate: 1e-5, epochs: 15, batch_size: 8")
-        print("   L2 e dropout no head já aplicados")
+        print("\n10. Fine-tuning...")
         
-        # Encontrar o ResNet50 base_model dentro do modelo
         base_model = None
         for layer in model.layers:
             if isinstance(layer, Model):
@@ -3078,7 +3076,6 @@ class AlzheimerApp:
                 metrics=['accuracy', 'AUC', recall_metric, precision_metric]
             )
             
-            # Early stopping e ReduceLROnPlateau
             early_stopping_b = EarlyStopping(
                 monitor='val_auc',
                 patience=5,
@@ -3095,26 +3092,21 @@ class AlzheimerApp:
                 verbose=1
             )
             
-            # Treinar Estágio 2
             history_b = model.fit(
                 X_train, y_train,
                 validation_data=(X_val, y_val),
-                epochs=15,  # 10-15 épocas conforme solicitado
+                epochs=15,
                 batch_size=8,
                 class_weight=class_weight_dict,
                 callbacks=[early_stopping_b, reduce_lr_b],
                 verbose=1
             )
         
-        # Combinar históricos (usar .get() para evitar KeyError)
-        # Verificar nomes das métricas no histórico (pode variar: 'auc', 'AUC', 'val_auc', 'val_AUC')
         def get_metric(hist, key, default=[]):
-            """Busca métrica no histórico com diferentes variações de nome"""
             if not isinstance(hist, dict):
                 return default
             if key in hist:
                 return hist[key]
-            # Tentar variações do nome
             variations = [key.lower(), key.upper(), key.capitalize(), 
                           'val_' + key.lower(), 'val_' + key.upper(), 'val_' + key.capitalize()]
             for var in variations:
@@ -3139,7 +3131,6 @@ class AlzheimerApp:
             try:
                 y_val_pred_proba_temp = model.predict(X_val, verbose=0).flatten()
                 val_auc_calculated = roc_auc_score(y_val, y_val_pred_proba_temp)
-                # Criar lista com o valor calculado para cada época do estágio A
                 num_epochs_a = len(history_a.history.get('val_accuracy', []))
                 if num_epochs_a > 0:
                     history['val_auc'] = [val_auc_calculated] * num_epochs_a
@@ -3150,16 +3141,13 @@ class AlzheimerApp:
                 print(f"   Aviso: Não foi possível calcular AUC: {e}")
                 history['val_auc'] = []
         
-        # Plotar curva de aprendizado melhorada
-        print("\n10. Gerando gráfico de aprendizado...")
+        print("\n11. Gerando gráfico de aprendizado...")
         
-        # Determinar número de subplots baseado nas métricas disponíveis
         has_auc = len(history['val_auc']) > 0
         num_subplots = 3 if has_auc else 2
         
         plt.figure(figsize=(15 if has_auc else 12, 5))
         
-        # Subplot 1: Acurácia
         plt.subplot(1, num_subplots, 1)
         if len(history['accuracy']) > 0:
             plt.plot(history['accuracy'], label='Treino', marker='o', markersize=3)
@@ -3171,7 +3159,6 @@ class AlzheimerApp:
         plt.legend()
         plt.grid(True, alpha=0.3)
         
-        # Subplot 2: AUC (se disponível)
         if has_auc:
             plt.subplot(1, num_subplots, 2)
             plt.plot(history['val_auc'], label='Validação AUC', marker='s', markersize=3, color='green')
@@ -3181,7 +3168,6 @@ class AlzheimerApp:
             plt.legend()
             plt.grid(True, alpha=0.3)
         
-        # Subplot 3 (ou 2 se não tiver AUC): Loss
         plt.subplot(1, num_subplots, num_subplots)
         if len(history['loss']) > 0:
             plt.plot(history['loss'], label='Treino', marker='o', markersize=3)
@@ -3203,7 +3189,6 @@ class AlzheimerApp:
         print("   Maximizando F1 ou balanced accuracy (não só acurácia)...")
         y_val_pred_proba = model.predict(X_val, verbose=0).flatten()
         
-        # Calcular precision_recall_curve
         from sklearn.metrics import precision_recall_curve
         precision_vals, recall_vals, pr_thresholds = precision_recall_curve(y_val, y_val_pred_proba)
         
@@ -3237,7 +3222,6 @@ class AlzheimerApp:
                 best_bal_acc = balanced_acc
                 best_threshold_bal = threshold
         
-        # Usar threshold que maximiza F1 (prioridade) ou balanced accuracy
         if best_f1 > 0:
             optimal_threshold = best_threshold_f1
             metric_used = "F1"
@@ -3247,7 +3231,6 @@ class AlzheimerApp:
             metric_used = "Balanced Accuracy"
             best_score = best_bal_acc
         
-        # Calcular métricas finais no threshold escolhido
         y_val_pred_optimal = (y_val_pred_proba >= optimal_threshold).astype(int)
         tn = np.sum((y_val == 0) & (y_val_pred_optimal == 0))
         fp = np.sum((y_val == 0) & (y_val_pred_optimal == 1))
@@ -3314,11 +3297,10 @@ class AlzheimerApp:
             print("\n13. Avaliando no conjunto de teste com threshold ótimo...")
             print(f"   Threshold usado: {optimal_threshold:.4f} (encontrado na validação)")
             y_test_pred_proba = model.predict(X_test, verbose=0).flatten()
-            # Usar threshold ótimo em vez de 0.5
             y_test_pred = (y_test_pred_proba >= optimal_threshold).astype(int)
             
             accuracy = accuracy_score(y_test, y_test_pred)
-            sensitivity = recall_score(y_test, y_test_pred)  # Recall da classe positiva (Demented)
+            sensitivity = recall_score(y_test, y_test_pred)
             precision = precision_score(y_test, y_test_pred)
             f1 = f1_score(y_test, y_test_pred)
             cm = confusion_matrix(y_test, y_test_pred)
@@ -3326,17 +3308,14 @@ class AlzheimerApp:
             tn, fp, fn, tp = cm.ravel()
             specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
             
-            # Calcular AUC
             test_auc = roc_auc_score(y_test, y_test_pred_proba)
             
-            # Plotar matriz de confusão
             plt.figure(figsize=(8, 6))
             if HAS_SEABORN:
                 sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
                             xticklabels=['NonDemented', 'Demented'],
                             yticklabels=['NonDemented', 'Demented'])
             else:
-                # Usar matplotlib se seaborn não estiver disponível
                 plt.imshow(cm, interpolation='nearest', cmap='Blues')
                 plt.colorbar()
                 tick_marks = np.arange(2)
@@ -3356,8 +3335,6 @@ class AlzheimerApp:
             plt.close()
             print("   Salvo: confusion_resnet50.png")
             
-            # Exibir resultados (já foram exibidos acima)
-            # Calcular balanced accuracy
             balanced_acc_test = (sensitivity + specificity) / 2.0
             
             print(f"Threshold usado: {optimal_threshold:.4f} (ótimo encontrado na validação)")
@@ -3372,6 +3349,14 @@ class AlzheimerApp:
             print(f"[[{tn:4d} {fp:4d}]")
             print(f" [{fn:4d} {tp:4d}]]")
             print("="*70 + "\n")
+            
+            self.metrics['classifiers']['resnet50'] = {
+                'accuracy': accuracy,
+                'sensitivity': sensitivity,
+                'specificity': specificity,
+                'f1': f1,
+                'auc': test_auc
+            }
             
             return model, accuracy, sensitivity, specificity
         else:
@@ -3984,38 +3969,20 @@ class AlzheimerApp:
             print(f"R² (Coeficiente de Determinação): {test_r2:.4f}")
             print("="*70 + "\n")
             
-            # Análise: (a) As entradas são suficientes para boa predição?
             print("\n" + "="*70)
             print("ANÁLISE: SUFICIÊNCIA DAS ENTRADAS")
             print("="*70)
-            print(f"Regressor Profundo (ResNet50):")
             print(f"  MAE: {test_mae:.2f} anos")
             print(f"  RMSE: {test_rmse:.2f} anos")
             print(f"  R²: {test_r2:.4f}")
-            
-            # Comentário sobre qualidade
-            if test_mae < 5.0 and test_r2 > 0.5:
-                print("\n   Qualidade ACEITÁVEL: MAE baixo e R² razoável indicam que as imagens")
-                print("    NIfTI (slice axial) capturam informação relevante sobre a idade.")
-            elif test_mae < 10.0 and test_r2 > 0.3:
-                print("\n   Qualidade MODERADA: As imagens fornecem alguma informação sobre idade,")
-                print("    mas há espaço para melhoria. Considere usar múltiplos slices ou")
-                print("    modelos mais complexos.")
-            else:
-                print("\n   Qualidade FRACA: O slice único pode não ser suficiente para predição")
-                print("    precisa de idade. Considere usar múltiplos slices ou combinar com")
-                print("    features tabulares.")
             print("="*70 + "\n")
             
-            # Análise: (b) Exames posteriores têm idade maior que exames anteriores?
             print("\n" + "="*70)
             print("ANÁLISE: MONOTONICIDADE DA IDADE POR VISITA")
             print("="*70)
             
-            # Combinar todos os dataframes para análise
             all_df = pd.concat([train_df, val_df, test_df], ignore_index=True)
             
-            # Verificar colunas disponíveis para patient_id e visit/date
             patient_id_cols = ["Subject ID", "SubjectID", "patient_id", "Patient ID"]
             visit_cols = ["Visit", "visit", "Session", "session", "Exam Date", "exam_date", "Date", "date"]
             
@@ -4035,30 +4002,23 @@ class AlzheimerApp:
             if patient_id_col and visit_col:
                 print(f"   Colunas encontradas: {patient_id_col}, {visit_col}")
                 
-                # Preparar dados para análise
                 df_analysis = all_df[[patient_id_col, visit_col, age_col]].copy()
                 df_analysis = df_analysis.dropna(subset=[patient_id_col, visit_col, age_col])
-                
-                # Converter visit para numérico se possível
                 df_analysis[visit_col] = pd.to_numeric(df_analysis[visit_col], errors='coerce')
                 df_analysis[age_col] = pd.to_numeric(df_analysis[age_col], errors='coerce')
                 df_analysis = df_analysis.dropna()
-                
-                # Ordenar por patient_id e visit
                 df_sorted = df_analysis.sort_values([patient_id_col, visit_col])
                 
                 violations = []
                 violation_details = []
                 
                 for pid, g in df_sorted.groupby(patient_id_col):
-                    if len(g) > 1:  # Apenas pacientes com múltiplas visitas
+                    if len(g) > 1:
                         ages = g[age_col].values
                         visits = g[visit_col].values
                         
-                        # Verificar se há violação (idade diminui entre visitas)
                         if np.any(np.diff(ages) < 0):
                             violations.append(pid)
-                            # Detalhar violações
                             for i in range(len(ages) - 1):
                                 if ages[i+1] < ages[i]:
                                     violation_details.append({
@@ -4100,32 +4060,6 @@ class AlzheimerApp:
             
             # Análise final (limitações)
             print("\n" + "="*70)
-            print("ANÁLISE: LIMITAÇÕES E SUFICIÊNCIA DAS ENTRADAS")
-            print("="*70)
-            print("""
-As entradas em cada caso apresentam limitações que afetam a qualidade da predição:
-
-REGRESSOR RASO (Linear Regression - Features Ventriculares):
-- Descritores ventriculares (area, perimeter, etc.) capturam apenas características morfológicas 
-  específicas dos ventrículos, que podem não estar diretamente correlacionadas com a idade.
-- O dataset é pequeno, o que limita a capacidade de generalização do modelo.
-- Descritores manuais podem não capturar toda a variação relacionada ao envelhecimento cerebral.
-- Regressão Linear é um modelo simples que pode não capturar relações não-lineares complexas.
-
-REGRESSOR PROFUNDO (ResNet50 - Slice Axial):
-- Uso de apenas um slice axial central perde informação 3D importante do volume cerebral.
-- Transfer learning do ImageNet (imagens naturais) para MRI (imagens médicas) representa uma 
-  diferença de domínio significativa, limitando a eficácia do conhecimento pré-treinado.
-- O dataset pequeno dificulta o fine-tuning adequado de redes profundas.
-- Imagens NIfTI processadas como 2D podem não preservar características espaciais relevantes.
-
-CONCLUSÃO:
-As entradas são limitadas para obter predições muito precisas. O regressor profundo tem 
-potencial para capturar padrões mais complexos, mas é limitado pelo tamanho do dataset e 
-pela diferença de domínio. O regressor raso (Linear Regression) é mais interpretável, mas 
-os descritores ventriculares isolados podem não ser suficientes para estimar idade com alta precisão.
-            """)
-            print("="*70 + "\n")
             
             return model, test_mae, test_rmse, test_r2
         else:
