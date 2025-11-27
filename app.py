@@ -137,12 +137,7 @@ class AlzheimerApp:
         self.filter_params = {
             'clahe_clip_limit': 2.0,
             'clahe_grid_size': 8,
-            'gaussian_kernel': 5,
             'median_kernel': 5,
-            'bilateral_d': 9,
-            'bilateral_sigma': 75,
-            'canny_low': 50,
-            'canny_high': 150,
             'erosion_kernel': 3,
             'erosion_iterations': 1,
         }
@@ -198,7 +193,7 @@ class AlzheimerApp:
         self.canvas_preprocessed = tk.Canvas(preprocessed_frame, bg="gray", width=280, height=250)
         self.canvas_preprocessed.pack(fill=tk.BOTH, expand=True)
         
-        # LINHA 2: Segmentada (largura completa)
+        # LINHA 2: Segmentada
         bottom_row_frame = ttk.Frame(images_container)
         bottom_row_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(3,0))
         
@@ -242,12 +237,6 @@ class AlzheimerApp:
         
         control_canvas.bind_all("<MouseWheel>", _on_mousewheel)
         
-        self.lbl_csv_status = ttk.Label(control_frame, text="CSV não carregado", foreground="red")
-        self.lbl_csv_status.pack(pady=5, fill=tk.X)
-        
-        btn_load_csv = ttk.Button(control_frame, text="Carregar CSV", command=self.load_csv)
-        btn_load_csv.pack(pady=5, fill=tk.X)
-        
         btn_load_image = ttk.Button(control_frame, text="Carregar Imagem", command=self.load_image)
         btn_load_image.pack(pady=5, fill=tk.X)
         
@@ -287,37 +276,44 @@ class AlzheimerApp:
                   foreground="blue", wraplength=340).pack(pady=(2,0), padx=5)
         
         # Variável para armazenar o filtro selecionado
-        self.filter_mode = tk.StringVar(value="otsu_clahe")
+        self.filter_mode = tk.StringVar(value="clahe")
         
         # Opções de filtros
         rb_filter_frame = ttk.Frame(self.section1_frame)
         rb_filter_frame.pack(pady=5, fill=tk.X)
         
-        ttk.Radiobutton(rb_filter_frame, text="Otsu + CLAHE", 
-                       variable=self.filter_mode, value="otsu_clahe").pack(anchor=tk.W, padx=20)
         ttk.Radiobutton(rb_filter_frame, text="CLAHE (Equalização)", 
                        variable=self.filter_mode, value="clahe").pack(anchor=tk.W, padx=20)
         ttk.Radiobutton(rb_filter_frame, text="Otsu (Binarização)", 
                        variable=self.filter_mode, value="otsu").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(rb_filter_frame, text="Canny (Bordas)", 
-                       variable=self.filter_mode, value="canny").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(rb_filter_frame, text="Gaussian Blur", 
-                       variable=self.filter_mode, value="gaussian").pack(anchor=tk.W, padx=20)
         ttk.Radiobutton(rb_filter_frame, text="Median Filter", 
                        variable=self.filter_mode, value="median").pack(anchor=tk.W, padx=20)
-        ttk.Radiobutton(rb_filter_frame, text="Bilateral Filter", 
-                       variable=self.filter_mode, value="bilateral").pack(anchor=tk.W, padx=20)
         ttk.Radiobutton(rb_filter_frame, text="Erosão (Morphology)", 
                        variable=self.filter_mode, value="erosion").pack(anchor=tk.W, padx=20)
         
         ttk.Label(self.section1_frame, text="Parâmetros do Filtro:", foreground="blue").pack(pady=(10,2))
         
         # Frame com scroll para parâmetros
-        params_canvas = tk.Canvas(self.section1_frame, height=120, bg="white")
-        params_canvas.pack(fill=tk.X, pady=5)
+        params_container = ttk.Frame(self.section1_frame)
+        params_container.pack(fill=tk.X, pady=5)
+        
+        params_canvas = tk.Canvas(params_container, height=150, borderwidth=0, highlightthickness=0)
+        params_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        params_scrollbar = ttk.Scrollbar(params_container, orient="vertical", command=params_canvas.yview)
+        params_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        params_canvas.configure(yscrollcommand=params_scrollbar.set)
         
         params_frame = ttk.Frame(params_canvas)
         params_canvas.create_window((0, 0), window=params_frame, anchor=tk.NW)
+        
+        def _on_params_configure(event):
+            params_canvas.configure(scrollregion=params_canvas.bbox("all"))
+        
+        params_frame.bind("<Configure>", _on_params_configure)
+        params_canvas.bind(
+            "<MouseWheel>",
+            lambda event: params_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        )
         
         # CLAHE
         ttk.Label(params_frame, text="CLAHE Clip Limit:", font=("Arial", 8)).grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
@@ -336,74 +332,31 @@ class AlzheimerApp:
         self.slider_clahe_grid.set(8)
         self.slider_clahe_grid.grid(row=1, column=2, padx=5)
         
-        # Gaussian
-        ttk.Label(params_frame, text="Gaussian Kernel:", font=("Arial", 8)).grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_gaussian = ttk.Label(params_frame, text="5", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_gaussian.grid(row=2, column=1, padx=5)
-        self.slider_gaussian = ttk.Scale(params_frame, from_=3, to=15, orient=tk.HORIZONTAL,
-                                        command=self.update_gaussian, length=150)
-        self.slider_gaussian.set(5)
-        self.slider_gaussian.grid(row=2, column=2, padx=5)
-        
         # Median
-        ttk.Label(params_frame, text="Median Kernel:", font=("Arial", 8)).grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(params_frame, text="Median Kernel:", font=("Arial", 8)).grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
         self.lbl_median = ttk.Label(params_frame, text="5", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_median.grid(row=3, column=1, padx=5)
+        self.lbl_median.grid(row=2, column=1, padx=5)
         self.slider_median = ttk.Scale(params_frame, from_=3, to=15, orient=tk.HORIZONTAL,
                                       command=self.update_median, length=150)
         self.slider_median.set(5)
-        self.slider_median.grid(row=3, column=2, padx=5)
-        
-        # Canny
-        ttk.Label(params_frame, text="Canny Low:", font=("Arial", 8)).grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_canny_low = ttk.Label(params_frame, text="50", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_canny_low.grid(row=4, column=1, padx=5)
-        self.slider_canny_low = ttk.Scale(params_frame, from_=0, to=255, orient=tk.HORIZONTAL,
-                                         command=self.update_canny_low, length=150)
-        self.slider_canny_low.set(50)
-        self.slider_canny_low.grid(row=4, column=2, padx=5)
-        
-        ttk.Label(params_frame, text="Canny High:", font=("Arial", 8)).grid(row=5, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_canny_high = ttk.Label(params_frame, text="150", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_canny_high.grid(row=5, column=1, padx=5)
-        self.slider_canny_high = ttk.Scale(params_frame, from_=0, to=255, orient=tk.HORIZONTAL,
-                                          command=self.update_canny_high, length=150)
-        self.slider_canny_high.set(150)
-        self.slider_canny_high.grid(row=5, column=2, padx=5)
-        
-        # Bilateral
-        ttk.Label(params_frame, text="Bilateral d:", font=("Arial", 8)).grid(row=6, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_bilateral_d = ttk.Label(params_frame, text="9", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_bilateral_d.grid(row=6, column=1, padx=5)
-        self.slider_bilateral_d = ttk.Scale(params_frame, from_=5, to=15, orient=tk.HORIZONTAL,
-                                           command=self.update_bilateral_d, length=150)
-        self.slider_bilateral_d.set(9)
-        self.slider_bilateral_d.grid(row=6, column=2, padx=5)
-        
-        ttk.Label(params_frame, text="Bilateral Sigma:", font=("Arial", 8)).grid(row=7, column=0, sticky=tk.W, padx=5, pady=2)
-        self.lbl_bilateral_sigma = ttk.Label(params_frame, text="75", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_bilateral_sigma.grid(row=7, column=1, padx=5)
-        self.slider_bilateral_sigma = ttk.Scale(params_frame, from_=10, to=150, orient=tk.HORIZONTAL,
-                                               command=self.update_bilateral_sigma, length=150)
-        self.slider_bilateral_sigma.set(75)
-        self.slider_bilateral_sigma.grid(row=7, column=2, padx=5)
+        self.slider_median.grid(row=2, column=2, padx=5)
         
         # Erosão
-        ttk.Label(params_frame, text="Erosão Kernel:", font=("Arial", 8)).grid(row=8, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(params_frame, text="Erosão Kernel:", font=("Arial", 8)).grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
         self.lbl_erosion_kernel = ttk.Label(params_frame, text="3", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_erosion_kernel.grid(row=8, column=1, padx=5)
+        self.lbl_erosion_kernel.grid(row=3, column=1, padx=5)
         self.slider_erosion_kernel = ttk.Scale(params_frame, from_=3, to=9, orient=tk.HORIZONTAL,
                                               command=self.update_erosion_kernel, length=150)
         self.slider_erosion_kernel.set(3)
-        self.slider_erosion_kernel.grid(row=8, column=2, padx=5)
+        self.slider_erosion_kernel.grid(row=3, column=2, padx=5)
         
-        ttk.Label(params_frame, text="Erosão Iterações:", font=("Arial", 8)).grid(row=9, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(params_frame, text="Erosão Iterações:", font=("Arial", 8)).grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
         self.lbl_erosion_iterations = ttk.Label(params_frame, text="1", foreground="blue", font=("Arial", 8, "bold"))
-        self.lbl_erosion_iterations.grid(row=9, column=1, padx=5)
+        self.lbl_erosion_iterations.grid(row=4, column=1, padx=5)
         self.slider_erosion_iterations = ttk.Scale(params_frame, from_=1, to=10, orient=tk.HORIZONTAL,
                                                    command=self.update_erosion_iterations, length=150)
         self.slider_erosion_iterations.set(1)
-        self.slider_erosion_iterations.grid(row=9, column=2, padx=5)
+        self.slider_erosion_iterations.grid(row=4, column=2, padx=5)
         
         filter_buttons = ttk.Frame(self.section1_frame)
         filter_buttons.pack(pady=5, fill=tk.X)
@@ -446,8 +399,6 @@ class AlzheimerApp:
         
         info_frame = ttk.Frame(self.section2_frame)
         info_frame.pack(pady=(5,10), fill=tk.X)
-        ttk.Label(info_frame, text="A segmentação SEMPRE usa a Janela 2 (Pré-processada)", 
-                  foreground="darkblue", font=("Arial", 8, "italic"), wraplength=340).pack(padx=5)
         
         ttk.Label(self.section2_frame, text="Parâmetros de Segmentação:", foreground="blue", font=("Arial", 9, "bold")).pack(pady=(5,5))
         
@@ -485,29 +436,6 @@ class AlzheimerApp:
                                        command=self.update_kernel)
         self.slider_kernel.set(15)
         self.slider_kernel.pack(fill=tk.X, padx=10)
-        
-        # Operações Morfológicas
-        ttk.Label(self.section2_frame, text="Operações Morfológicas:", foreground="blue").pack(pady=(10,5))
-        
-        self.var_opening = tk.BooleanVar(value=True)
-        chk_opening = ttk.Checkbutton(self.section2_frame, text="Abertura (remover ruído)", 
-                                      variable=self.var_opening, command=self.update_morphology_flags)
-        chk_opening.pack(anchor=tk.W, padx=20)
-        
-        self.var_closing = tk.BooleanVar(value=False)
-        chk_closing = ttk.Checkbutton(self.section2_frame, text="Fechamento (fechar gaps)", 
-                                      variable=self.var_closing, command=self.update_morphology_flags)
-        chk_closing.pack(anchor=tk.W, padx=20)
-        
-        self.var_fill_holes = tk.BooleanVar(value=True)
-        chk_fill_holes = ttk.Checkbutton(self.section2_frame, text="Preencher buracos", 
-                                         variable=self.var_fill_holes, command=self.update_morphology_flags)
-        chk_fill_holes.pack(anchor=tk.W, padx=20)
-        
-        self.var_smooth = tk.BooleanVar(value=True)
-        chk_smooth = ttk.Checkbutton(self.section2_frame, text="Suavizar contornos", 
-                                     variable=self.var_smooth, command=self.update_morphology_flags)
-        chk_smooth.pack(anchor=tk.W, padx=20)
         
         ttk.Separator(self.section2_frame, orient='horizontal').pack(pady=10, fill=tk.X)
         
@@ -908,7 +836,6 @@ class AlzheimerApp:
                       "- Otimizador: Adam (lr=1e-4)\n"
                       "- Early stopping: interrompe se sem melhoria\n"
                       "- Formatos: .png, .jpg, .jpeg, .nii, .nii.gz\n"
-                      "- Imagens 3D (.nii): extrai slice axial central\n"
                       "- Saídas: curva de aprendizado e matriz de confusão",
                  wraplength=700,
                  justify=tk.LEFT).pack(pady=5)
@@ -4107,13 +4034,6 @@ class AlzheimerApp:
         self.morphology_kernel_size = kernel_size
         self.lbl_kernel.config(text=f"{kernel_size}x{kernel_size}")
     
-    def update_morphology_flags(self):
-        """Atualiza as flags de operações morfológicas"""
-        self.apply_opening = self.var_opening.get()
-        self.apply_closing = self.var_closing.get()
-        self.apply_fill_holes = self.var_fill_holes.get()
-        self.apply_smooth_contours = self.var_smooth.get()
-    
     def update_auto_seeds_display(self):
         """Atualiza a lista visual de seeds fixos."""
         self.auto_seeds_listbox.delete(0, tk.END)
@@ -4156,37 +4076,12 @@ class AlzheimerApp:
         self.filter_params['clahe_grid_size'] = grid_size
         self.lbl_clahe_grid.config(text=str(grid_size))
     
-    def update_gaussian(self, value):
-        kernel = int(float(value))
-        if kernel % 2 == 0:
-            kernel += 1
-        self.filter_params['gaussian_kernel'] = kernel
-        self.lbl_gaussian.config(text=str(kernel))
-    
     def update_median(self, value):
         kernel = int(float(value))
         if kernel % 2 == 0:
             kernel += 1
         self.filter_params['median_kernel'] = kernel
         self.lbl_median.config(text=str(kernel))
-    
-    def update_canny_low(self, value):
-        self.filter_params['canny_low'] = int(float(value))
-        self.lbl_canny_low.config(text=str(int(float(value))))
-    
-    def update_canny_high(self, value):
-        self.filter_params['canny_high'] = int(float(value))
-        self.lbl_canny_high.config(text=str(int(float(value))))
-    
-    def update_bilateral_d(self, value):
-        d = int(float(value))
-        self.filter_params['bilateral_d'] = d
-        self.lbl_bilateral_d.config(text=str(d))
-    
-    def update_bilateral_sigma(self, value):
-        sigma = int(float(value))
-        self.filter_params['bilateral_sigma'] = sigma
-        self.lbl_bilateral_sigma.config(text=str(sigma))
     
     def update_erosion_kernel(self, value):
         kernel = int(float(value))
@@ -4528,19 +4423,7 @@ class AlzheimerApp:
         img_np = np.array(base_image.convert('L'))
         
         # Aplica o filtro selecionado COM PARÂMETROS
-        if filter_type == "otsu_clahe":
-            # CLAHE primeiro
-            clahe = cv2.createCLAHE(
-                clipLimit=params['clahe_clip_limit'], 
-                tileGridSize=(params['clahe_grid_size'], params['clahe_grid_size'])
-            )
-            img_filtered = clahe.apply(img_np)
-            # Depois Otsu
-            _, img_filtered = cv2.threshold(img_filtered, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            filter_name = f"Otsu+CLAHE(clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']})"
-            self.log(f"    Params: clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']}")
-            
-        elif filter_type == "clahe":
+        if filter_type == "clahe":
             clahe = cv2.createCLAHE(
                 clipLimit=params['clahe_clip_limit'], 
                 tileGridSize=(params['clahe_grid_size'], params['clahe_grid_size'])
@@ -4554,30 +4437,12 @@ class AlzheimerApp:
             filter_name = "Otsu"
             self.log("    Binarização automática")
             
-        elif filter_type == "canny":
-            img_filtered = cv2.Canny(img_np, params['canny_low'], params['canny_high'])
-            filter_name = f"Canny(low={params['canny_low']}, high={params['canny_high']})"
-            self.log(f"    Params: low={params['canny_low']}, high={params['canny_high']}")
-            
-        elif filter_type == "gaussian":
-            k = params['gaussian_kernel']
-            img_filtered = cv2.GaussianBlur(img_np, (k, k), 0)
-            filter_name = f"Gaussian(k={k})"
-            self.log(f"    Params: kernel={k}x{k}")
-            
         elif filter_type == "median":
             k = params['median_kernel']
             img_filtered = cv2.medianBlur(img_np, k)
             filter_name = f"Median(k={k})"
             self.log(f"    Params: kernel={k}x{k}")
             
-        elif filter_type == "bilateral":
-            d = params['bilateral_d']
-            sigma = params['bilateral_sigma']
-            img_filtered = cv2.bilateralFilter(img_np, d, sigma, sigma)
-            filter_name = f"Bilateral(d={d}, σ={sigma})"
-            self.log(f"    Params: d={d}, sigma={sigma}")
-        
         elif filter_type == "erosion":
             kernel_size = params['erosion_kernel']
             iterations = params['erosion_iterations']
@@ -4646,16 +4511,16 @@ class AlzheimerApp:
             self.accumulated_mask = None
             self.multi_seed_points = []
             self.lbl_multi_seed.config(
-                text="Multi-Seed: 🟢 ATIVO (Clique nas janelas para adicionar seeds)",
+                text="Multi-Seed: ATIVO (Clique nas janelas para adicionar seeds)",
                 foreground="green"
             )
-            self.log("\n🟢 Modo Multi-Seed ATIVADO - Clique nas janelas para adicionar seeds")
+            self.log("\n[INFO] Modo Multi-Seed ATIVADO - Clique nas janelas para adicionar seeds")
         else:
             self.lbl_multi_seed.config(
-                text="Multi-Seed: 🔴 INATIVO",
+                text="Multi-Seed: INATIVO",
                 foreground="gray"
             )
-            self.log("🔴 Modo Multi-Seed DESATIVADO\n")
+            self.log("[INFO] Modo Multi-Seed DESATIVADO\n")
     
     def open_batch_config_window(self):
         """Abre janela de configuração avançada para processamento em lote."""
@@ -4743,7 +4608,7 @@ class AlzheimerApp:
         filter_frame = ttk.LabelFrame(main_frame, text=" 1. FILTROS A APLICAR (Pipeline)", padding="10")
         filter_frame.pack(fill=tk.X, pady=10)
         
-        ttk.Label(filter_frame, text="📋 Adicione filtros ao pipeline (opcional):", 
+        ttk.Label(filter_frame, text="Adicione filtros ao pipeline (opcional):", 
                   foreground="blue", font=("Arial", 9)).pack(anchor=tk.W, pady=(0,2))
         ttk.Label(filter_frame, text="Os filtros serão aplicados em sequência antes da segmentação.", 
                   foreground="gray", font=("Arial", 8)).pack(anchor=tk.W, pady=(0,5))
@@ -4760,12 +4625,8 @@ class AlzheimerApp:
         # Mapeamento de nome de exibição para valor interno
         self.filter_options_map = {
             "CLAHE": "clahe",
-            "Gaussian Blur": "gaussian",
             "Median Filter": "median",
-            "Bilateral Filter": "bilateral",
-            "Canny": "canny",
             "Otsu": "otsu",
-            "Otsu + CLAHE": "otsu_clahe",
             "Erosão": "erosion"
         }
         
@@ -4774,7 +4635,7 @@ class AlzheimerApp:
                                     values=list(self.filter_options_map.keys()), width=20, state="readonly")
         filter_combo.pack(side=tk.LEFT, padx=5)
         
-        btn_add_filter = ttk.Button(filter_select_frame, text="➕ Adicionar Filtro", 
+        btn_add_filter = ttk.Button(filter_select_frame, text="Adicionar Filtro", 
                                     command=lambda: self.add_filter_to_batch(config_window))
         btn_add_filter.pack(side=tk.LEFT, padx=5)
         
@@ -4820,7 +4681,7 @@ class AlzheimerApp:
         self.batch_seed_y.pack(side=tk.LEFT, padx=2)
         self.batch_seed_y.insert(0, "91")
         
-        btn_add_seed = ttk.Button(seed_entry_frame, text="➕ Adicionar Seed", 
+        btn_add_seed = ttk.Button(seed_entry_frame, text="Adicionar Seed", 
                                   command=self.add_seed_to_batch)
         btn_add_seed.pack(side=tk.LEFT, padx=5)
         
@@ -4883,25 +4744,6 @@ class AlzheimerApp:
         batch_kernel_slider.set(self.morphology_kernel_size)
         batch_kernel_slider.pack(fill=tk.X, padx=5)
         
-        # Morfologia
-        ttk.Label(seg_frame, text="Operações Morfológicas:", foreground="blue").pack(anchor=tk.W, pady=(10,5))
-        
-        self.batch_var_opening = tk.BooleanVar(value=self.apply_opening)
-        ttk.Checkbutton(seg_frame, text="Abertura (remover ruído)", 
-                       variable=self.batch_var_opening).pack(anchor=tk.W, padx=20)
-        
-        self.batch_var_closing = tk.BooleanVar(value=self.apply_closing)
-        ttk.Checkbutton(seg_frame, text="Fechamento (fechar gaps)", 
-                       variable=self.batch_var_closing).pack(anchor=tk.W, padx=20)
-        
-        self.batch_var_fill_holes = tk.BooleanVar(value=self.apply_fill_holes)
-        ttk.Checkbutton(seg_frame, text="Preencher buracos", 
-                       variable=self.batch_var_fill_holes).pack(anchor=tk.W, padx=20)
-        
-        self.batch_var_smooth = tk.BooleanVar(value=self.apply_smooth_contours)
-        ttk.Checkbutton(seg_frame, text="Suavizar contornos", 
-                       variable=self.batch_var_smooth).pack(anchor=tk.W, padx=20)
-        
         # ═══════════════════════════════════════════════════════════
         # BOTÃO FINAL
         # ═══════════════════════════════════════════════════════════
@@ -4942,12 +4784,9 @@ class AlzheimerApp:
         
         filter_display = {
             "clahe": f"CLAHE(clip={params['clahe_clip_limit']:.1f}, grid={params['clahe_grid_size']})",
-            "gaussian": f"Gaussian(k={params['gaussian_kernel']})",
             "median": f"Median(k={params['median_kernel']})",
-            "bilateral": f"Bilateral(d={params['bilateral_d']}, σ={params['bilateral_sigma']})",
-            "canny": f"Canny(low={params['canny_low']}, high={params['canny_high']})",
             "otsu": "Otsu",
-            "otsu_clahe": f"Otsu+CLAHE(clip={params['clahe_clip_limit']:.1f})"
+            "erosion": f"Erosão(k={params['erosion_kernel']}, iter={params['erosion_iterations']})"
         }
         
         detailed_name = filter_display.get(filter_type, display_name)
@@ -5178,31 +5017,11 @@ class AlzheimerApp:
                         )
                         processed_img = clahe.apply(processed_img)
                     
-                    elif filter_type == "gaussian_blur" or filter_type == "gaussian":
-                        k = params['gaussian_kernel']
-                        processed_img = cv2.GaussianBlur(processed_img, (k, k), 0)
-                    
                     elif filter_type == "median_filter" or filter_type == "median":
                         k = params['median_kernel']
                         processed_img = cv2.medianBlur(processed_img, k)
                     
-                    elif filter_type == "bilateral_filter" or filter_type == "bilateral":
-                        d = params['bilateral_d']
-                        sigma = params['bilateral_sigma']
-                        processed_img = cv2.bilateralFilter(processed_img, d, sigma, sigma)
-                    
-                    elif filter_type == "canny":
-                        processed_img = cv2.Canny(processed_img, params['canny_low'], params['canny_high'])
-                    
                     elif filter_type == "otsu":
-                        _, processed_img = cv2.threshold(processed_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                    
-                    elif filter_type == "otsu_clahe":
-                        clahe = cv2.createCLAHE(
-                            clipLimit=params['clahe_clip_limit'],
-                            tileGridSize=(params['clahe_grid_size'], params['clahe_grid_size'])
-                        )
-                        processed_img = clahe.apply(processed_img)
                         _, processed_img = cv2.threshold(processed_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                     
                     elif filter_type == "erosion":
@@ -5242,15 +5061,15 @@ class AlzheimerApp:
                 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
                 final_mask = combined_mask.copy()
                 
-                if self.batch_var_opening.get():
+                if self.apply_opening:
                     final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel)
                     self.log(f"       Abertura")
                 
-                if self.batch_var_closing.get():
+                if self.apply_closing:
                     final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, kernel)
                     self.log(f"       Fechamento")
                 
-                if self.batch_var_fill_holes.get():
+                if self.apply_fill_holes:
                     contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                     filled_mask = np.zeros_like(final_mask)
                     for cnt in contours:
@@ -5258,7 +5077,7 @@ class AlzheimerApp:
                     final_mask = filled_mask
                     self.log(f"       Preencher buracos")
                 
-                if self.batch_var_smooth.get():
+                if self.apply_smooth_contours:
                     contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                     smoothed_mask = np.zeros_like(final_mask)
                     for cnt in contours:
@@ -5568,14 +5387,6 @@ class AlzheimerApp:
             filtered_img = clahe.apply(img_np)
             self.lbl_current_filter.config(text="Filtro: CLAHE")
             self.log("Filtro CLAHE aplicado.")
-            
-        elif filter_name == "canny":
-            # Canny Edge Detection
-            # Primeiro aplica blur para reduzir ruído
-            blurred = cv2.GaussianBlur(img_np, (5, 5), 0)
-            filtered_img = cv2.Canny(blurred, threshold1=50, threshold2=150)
-            self.lbl_current_filter.config(text="Filtro: Canny")
-            self.log("Filtro Canny aplicado.")
             
         elif filter_name == "otsu":
             # Aplica CLAHE primeiro
