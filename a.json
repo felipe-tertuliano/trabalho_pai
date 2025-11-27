@@ -1,0 +1,58 @@
+{
+    "workbench.colorTheme": "Default Dark+",
+    "files.exclude": {
+        "**/.classpath": true,
+        "**/.project": true,
+        "**/.settings": true,
+        "**/.factorypath": true
+    },
+    "dart.flutterSdkPath": "A:\\Flutter\\flutter",
+    "[dart]": {
+        "editor.formatOnSave": true,
+        "editor.formatOnType": true,
+        "editor.rulers": [
+            80
+        ],
+        "editor.selectionHighlight": false,
+        "editor.suggest.snippetsPreventQuickSuggestions": false,
+        "editor.suggestSelection": "first",
+        "editor.tabCompletion": "onlySnippets",
+        "editor.wordBasedSuggestions": "off"
+    },
+    "cmake.configureOnOpen": true,
+    "editor.inlineSuggest.enabled": true,
+    "security.workspace.trust.untrustedFiles": "open",
+    "d.servedPath": "C:\\Users\\1017035\\AppData\\Roaming\\code-d\\bin\\serve-d.exe",
+    "liveshare.notebooks.allowGuestExecuteCells": true,
+    "javascript.updateImportsOnFileMove.enabled": "always",
+    "git.confirmSync": false,
+    "[python]": {
+        "editor.formatOnType": true
+    },
+    "files.associations": {
+        "*.py": "python"
+    },
+    "[dockercompose]": {
+        "editor.insertSpaces": true,
+        "editor.tabSize": 2,
+        "editor.autoIndent": "advanced",
+        "editor.quickSuggestions": {
+            "other": true,
+            "comments": false,
+            "strings": true
+        },
+        "editor.defaultFormatter": "redhat.vscode-yaml"
+    },
+    "[github-actions-workflow]": {
+        "editor.defaultFormatter": "redhat.vscode-yaml"
+    },
+    "docker.extension.enableComposeLanguageServer": false,
+
+    // 🔽 ADICIONE ESTE BLOCO PARA DEIXAR COMENTÁRIOS INVISÍVEIS
+    "editor.tokenColorCustomizations": {
+        "comments": {
+            "foreground": "#1e1e1e",
+            "fontStyle": ""
+        }
+    }
+}
