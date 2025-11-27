@@ -29,6 +29,7 @@ from sklearn.utils.class_weight import compute_class_weight
 import xgboost as xgb
 import tensorflow as tf
 from tensorflow.keras.applications import ResNet50
+from tensorflow.keras.applications.resnet50 import preprocess_input
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Input, Dropout, BatchNormalization
 from tensorflow.keras.optimizers import Adam
@@ -2188,7 +2189,7 @@ class AlzheimerApp:
                     img_id_str = str(img_id).strip()
                     
                     suffixes = ['_axl', '_cor', '_sag', '_axial', '_coronal', '_sagittal', 
-                               '_ax', '_axl_', '_cor_', '_sag_']
+                               '_ax', '_axl_', '_cor_', '_sag_', '_axl_filtered']
                     
                     for ext in ['.nii', '.nii.gz', '.png', '.jpg', '.jpeg']:
                         path = os.path.join(base_image_dir, f"{img_id_str}{ext}")
@@ -2224,6 +2225,21 @@ class AlzheimerApp:
                                     if os.path.isfile(full_path):
                                         if any(file.lower().endswith(ext) for ext in ['.nii', '.nii.gz', '.png', '.jpg', '.jpeg']):
                                             return full_path
+                                
+                                if '_axl_filtered' in file:
+                                    file_base = file
+                                    for ext in ['.nii.gz', '.nii', '.png', '.jpg', '.jpeg']:
+                                        if file.lower().endswith(ext):
+                                            file_base = file[:-len(ext)]
+                                            break
+                                    
+                                    file_base_clean = file_base.replace('_axl_filtered', '')
+                                    
+                                    if file_base_clean == img_id_str:
+                                        full_path = os.path.join(base_image_dir, file)
+                                        if os.path.isfile(full_path):
+                                            if any(file.lower().endswith(ext) for ext in ['.nii', '.nii.gz', '.png', '.jpg', '.jpeg']):
+                                                return full_path
                     except (OSError, PermissionError):
                         pass
         
@@ -2248,16 +2264,12 @@ class AlzheimerApp:
                 img_data = nii_img.get_fdata().astype(np.float32)
                 
                 if len(img_data.shape) == 4:
-                    # 4D: (x, y, z, time) - pegar primeiro volume
                     img_data = img_data[:, :, :, 0]
                 
                 if len(img_data.shape) == 3:
-                    # 3D: (x, y, z) - extrair múltiplos slices AXIAL (eixo z)
-                    # Para slice axial, pegamos img_data[:, :, z_idx]
                     central_slice_idx = img_data.shape[2] // 2
                     
                     if num_slices == 3:
-                        # Pegar 3 slices axiais: central-2, central, central+2
                         slice_indices = [
                             max(0, central_slice_idx - 2),
                             central_slice_idx,
@@ -2265,7 +2277,6 @@ class AlzheimerApp:
                         ]
                         slices = [img_data[:, :, idx] for idx in slice_indices]
                     elif num_slices == 5:
-                        # Opcional: 5 slices axiais para média de predição
                         slice_indices = [
                             max(0, central_slice_idx - 4),
                             max(0, central_slice_idx - 2),
@@ -2275,12 +2286,10 @@ class AlzheimerApp:
                         ]
                         slices = [img_data[:, :, idx] for idx in slice_indices]
                     else:
-                        # Apenas slice axial central (compatibilidade)
                         slice_idx = img_data.shape[2] // 2
                         img_data = img_data[:, :, slice_idx]
-                        slices = [img_data]  # Criar lista com um único slice
+                        slices = [img_data]
                     
-                    # Normalizar cada slice separadamente antes de empilhar
                     normalized_slices = []
                     for slice_data in slices:
                         p1 = np.percentile(slice_data, 1)
@@ -2297,40 +2306,31 @@ class AlzheimerApp:
                                 slice_norm = np.zeros_like(slice_data)
                         normalized_slices.append(slice_norm)
                     
-                    # Empilhar como canais RGB (3 ou 5 slices = 3 ou 5 canais)
-                    # Se 5 slices, usar apenas os 3 primeiros canais (ou média)
                     if len(normalized_slices) == 5:
-                        # Opção 1: Usar apenas 3 slices (primeiro, central, último)
                         img_data = np.stack([normalized_slices[0], normalized_slices[2], normalized_slices[4]], axis=-1)
                     else:
                         img_data = np.stack(normalized_slices, axis=-1)
                 elif len(img_data.shape) == 2:
-                    # 2D: já está no formato correto, replicar para 3 canais depois
                     pass
                 else:
                     print(f"  Aviso: Formato NIfTI não suportado (dimensões: {img_data.shape})")
                     return None
                 
-                # Se ainda não tem 3 canais (caso num_slices=1 ou 2D), normalizar e replicar
                 if len(img_data.shape) == 2:
-                    # Normalização de intensidade: clipping p1-p99 e min-max para [0,1]
                     p1 = np.percentile(img_data, 1)
                     p99 = np.percentile(img_data, 99)
                     if p99 > p1:
                         img_data = np.clip(img_data, p1, p99)
                         img_data = (img_data - p1) / (p99 - p1 + 1e-8)
                     else:
-                        # Fallback: normalização min-max
                         img_min = np.min(img_data)
                         img_max = np.max(img_data)
                         if img_max > img_min:
                             img_data = (img_data - img_min) / (img_max - img_min + 1e-8)
                         else:
                             img_data = np.zeros_like(img_data)
-                    # Replicar para 3 canais
                     img_data = np.stack([img_data, img_data, img_data], axis=-1)
                 elif len(img_data.shape) == 3 and img_data.shape[2] != 3:
-                    # Se tem 3 dimensões mas não 3 canais, normalizar e replicar
                     p1 = np.percentile(img_data, 1)
                     p99 = np.percentile(img_data, 99)
                     if p99 > p1:
@@ -2343,20 +2343,16 @@ class AlzheimerApp:
                             img_data = (img_data - img_min) / (img_max - img_min + 1e-8)
                         else:
                             img_data = np.zeros_like(img_data)
-                    # Replicar para 3 canais
                     img_data = np.stack([img_data, img_data, img_data], axis=-1)
                 else:
-                    # Já tem 3 canais (de múltiplos slices), normalização já foi feita por slice
                     pass
                 
-                # Normalização de intensidade: clipping p1-p99 e min-max para [0,1]
                 p1 = np.percentile(img_data, 1)
                 p99 = np.percentile(img_data, 99)
                 if p99 > p1:
                     img_data = np.clip(img_data, p1, p99)
                     img_data = (img_data - p1) / (p99 - p1 + 1e-8)
                 else:
-                    # Fallback: normalização min-max
                     img_min = np.min(img_data)
                     img_max = np.max(img_data)
                     if img_max > img_min:
@@ -2364,10 +2360,7 @@ class AlzheimerApp:
                     else:
                         img_data = np.zeros_like(img_data)
                 
-                # Redimensionar para 224x224 usando PIL (mais compatível)
-                # Se já tem 3 canais (de múltiplos slices), redimensionar cada canal
                 if img_data.shape[2] == 3:
-                    # Redimensionar cada canal separadamente
                     resized_channels = []
                     for c in range(3):
                         img_2d = img_data[:, :, c]
@@ -2376,39 +2369,34 @@ class AlzheimerApp:
                         resized_channels.append(np.array(img_pil).astype(np.float32) / 255.0)
                     img_data = np.stack(resized_channels, axis=-1)
                 else:
-                    # Fallback: replicar para 3 canais
                     img_2d = img_data[:, :, 0] if len(img_data.shape) == 3 else img_data
                     img_pil = Image.fromarray((img_2d * 255).astype(np.uint8), mode='L')
                     img_pil = img_pil.resize(target_size, Image.Resampling.LANCZOS)
                     img_resized = np.array(img_pil).astype(np.float32) / 255.0
                     img_data = np.stack([img_resized, img_resized, img_resized], axis=-1)
                 
-                # Converter para float32 [0, 1]
                 img_array = img_data.astype(np.float32)
                 
-                # Aplicar preprocess_input do ResNet50 (converte de [0,1] para formato ImageNet)
                 if use_preprocess_input:
-                    from tensorflow.keras.applications.resnet50 import preprocess_input
-                    # preprocess_input espera valores em [0, 255], então multiplicamos
                     img_array = (img_array * 255.0).astype(np.uint8)
                     img_array = preprocess_input(img_array)
                 else:
-                    # Normalização ImageNet manual
                     mean = np.array([0.485, 0.456, 0.406])
                     std = np.array([0.229, 0.224, 0.225])
                     img_array = (img_array - mean) / std
                 
             else:
-                img = Image.open(image_path).convert('RGB')
+                img = Image.open(image_path)
+                
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
                 img = img.resize(target_size, Image.Resampling.LANCZOS)
                 img_array = np.array(img).astype(np.float32)
                 
-                # Aplicar preprocess_input do ResNet50
                 if use_preprocess_input:
-                    from tensorflow.keras.applications.resnet50 import preprocess_input
                     img_array = preprocess_input(img_array)
                 else:
-                    # Normalização ImageNet manual
                     img_array = img_array / 255.0
                     mean = np.array([0.485, 0.456, 0.406])
                     std = np.array([0.229, 0.224, 0.225])
@@ -2436,7 +2424,6 @@ class AlzheimerApp:
         print(f"   Validação: {len(val_df)} exames")
         print(f"   Teste: {len(test_df)} exames")
         
-        # Features base
         base_features = ["area", "perimeter", "eccentricity", "extent", "solidity"]
         
         available_features = [f for f in base_features if f in train_df.columns]
@@ -2459,12 +2446,10 @@ class AlzheimerApp:
             X_val[col] = pd.to_numeric(X_val[col], errors='coerce')
             X_test[col] = pd.to_numeric(X_test[col], errors='coerce')
         
-        # Preencher NaN com média
         X_train = X_train.fillna(X_train.mean())
         X_val = X_val.fillna(X_train.mean())
         X_test = X_test.fillna(X_train.mean())
         
-        # Target: ClassBinary -> 0/1
         y_train = (train_df['ClassBinary'] == 'Demented').astype(int)
         y_val = (val_df['ClassBinary'] == 'Demented').astype(int)
         y_test = (test_df['ClassBinary'] == 'Demented').astype(int)
@@ -2487,15 +2472,11 @@ class AlzheimerApp:
         print(f"\n3. scale_pos_weight calculado: {pos_weight:.2f}")
         print("   Dados normalizados com StandardScaler")
         
-        # Random Search para otimizar hiperparâmetros
-        # IMPORTANTE: Usar apenas treino, não combinar com validação!
         print("\n4. Executando Random Search para otimizar hiperparâmetros...")
         print("   (Isso pode levar alguns minutos - testando 100 combinações com 3-fold CV)...")
         
-        # Definir espaço de busca de parâmetros MELHORADO
-        # n_estimators limitado a 400 para evitar travamento
         param_grid = {
-            'n_estimators': [200, 300, 400],  # Máximo 400 para não travar
+            'n_estimators': [200, 300, 400],
             'learning_rate': [0.01, 0.02, 0.05],
             'max_depth': [2, 3, 4, 5],
             'subsample': [0.7, 0.8, 0.9],
@@ -2506,7 +2487,6 @@ class AlzheimerApp:
             'reg_lambda': [1, 1.5, 2.0]
         }
         
-        # Modelo base (booster padrão gbtree)
         base_model = xgb.XGBClassifier(
             eval_metric='logloss',
             scale_pos_weight=pos_weight,
@@ -2514,24 +2494,20 @@ class AlzheimerApp:
             n_jobs=-1
         )
         
-        # Random Search com validação cruzada
-        # Usar 'roc_auc' ou 'f1' em vez de 'accuracy' para melhor generalização
         random_search = RandomizedSearchCV(
             estimator=base_model,
             param_distributions=param_grid,
-            n_iter=100,  # Voltou para 100 iterações
-            scoring='roc_auc',  # ROC-AUC é melhor para problemas desbalanceados
-            cv=3,  # Mantido em 3-fold para não travar
+            n_iter=100,
+            scoring='roc_auc',
+            cv=3,
             n_jobs=-1,
             random_state=42,
             verbose=1,
             refit=True
         )
         
-        # Usar APENAS treino no Random Search
         random_search.fit(X_train_scaled, y_train)
         
-        # Melhores parâmetros encontrados
         best_params = random_search.best_params_
         best_score = random_search.best_score_
         
@@ -2541,14 +2517,10 @@ class AlzheimerApp:
         for param, value in sorted(best_params.items()):
             print(f"     - {param}: {value}")
         
-        # Treinar XGBoost com os melhores parâmetros e EARLY STOPPING
         print("\n5. Treinando XGBoost com os melhores parâmetros e early stopping...")
         
-        # Usar n_estimators do melhor modelo encontrado (ou máximo se não especificado)
-        # Limitar a 400 para não travar (early stopping vai parar antes se necessário)
         n_estimators_final = min(best_params.get('n_estimators', 300), 400)
         
-        # Criar modelo com parâmetros otimizados (booster padrão gbtree)
         model = xgb.XGBClassifier(
             n_estimators=n_estimators_final,
             learning_rate=best_params.get('learning_rate', 0.01),
@@ -2565,17 +2537,14 @@ class AlzheimerApp:
             n_jobs=-1
         )
         
-        # Treinar com histórico e early stopping
-        # Nota: XGBoost 3.x usa callbacks para early stopping
         eval_set = [(X_train_scaled, y_train), (X_val_scaled, y_val)]
         
         try:
-            # Tentar usar callback (XGBoost 3.x)
             from xgboost.callback import EarlyStopping
             early_stop = EarlyStopping(
-                rounds=50,  # Para após 50 rounds sem melhoria
+                rounds=50,
                 save_best=True,
-                maximize=False,  # Minimizar logloss
+                maximize=False,
                 min_delta=0.001
             )
             model.fit(
@@ -2584,13 +2553,10 @@ class AlzheimerApp:
                 callbacks=[early_stop],
                 verbose=False
             )
-            # Usar o melhor número de estimadores encontrado pelo early stopping
             best_iteration = getattr(model, 'best_iteration', None)
             if best_iteration is None:
                 best_iteration = n_estimators_final
         except (ImportError, AttributeError, TypeError):
-            # Fallback para versões antigas ou se callback não funcionar
-            # Usar n_estimators menor para evitar overfitting
             n_estimators_safe = min(n_estimators_final, 400)
             model = xgb.XGBClassifier(
                 n_estimators=n_estimators_safe,
@@ -2616,20 +2582,16 @@ class AlzheimerApp:
         
         print(f"   Melhor iteração encontrada: {best_iteration}")
         
-        # Extrair histórico de logloss
         results = model.evals_result()
         train_logloss = results['validation_0']['logloss']
         val_logloss = results['validation_1']['logloss']
         
-        # Plotar curva de aprendizado usando logloss diretamente (muito mais rápido)
-        # NÃO treinar múltiplos modelos temporários - isso é muito lento!
         print("\n6. Gerando gráfico de aprendizado...")
         print("   Usando histórico de logloss (sem treinar modelos adicionais)")
         
         plt.figure(figsize=(10, 6))
         
-        # Amostrar pontos do logloss para não sobrecarregar o gráfico
-        step_loss = max(1, len(train_logloss) // 30)  # Apenas 30 pontos
+        step_loss = max(1, len(train_logloss) // 30)
         indices = list(range(0, len(train_logloss), step_loss))
         if indices[-1] != len(train_logloss) - 1:
             indices.append(len(train_logloss) - 1)
@@ -2649,26 +2611,22 @@ class AlzheimerApp:
         plt.close()
         print("   Salvo: learning_curve_xgb.png")
         
-        # Avaliar no teste
         print("\n7. Avaliando no conjunto de teste...")
         y_test_pred = model.predict(X_test_scaled)
         
         accuracy = accuracy_score(y_test, y_test_pred)
-        sensitivity = recall_score(y_test, y_test_pred)  # Recall da classe positiva (Demented)
+        sensitivity = recall_score(y_test, y_test_pred)
         cm = confusion_matrix(y_test, y_test_pred)
         
-        # Especificidade = TN / (TN + FP)
         tn, fp, fn, tp = cm.ravel()
         specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
         
-        # Plotar matriz de confusão
         plt.figure(figsize=(8, 6))
         if HAS_SEABORN:
             sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
                         xticklabels=['NonDemented', 'Demented'],
                         yticklabels=['NonDemented', 'Demented'])
         else:
-            # Usar matplotlib se seaborn não estiver disponível
             plt.imshow(cm, interpolation='nearest', cmap='Blues')
             plt.colorbar()
             tick_marks = np.arange(2)
@@ -2687,7 +2645,6 @@ class AlzheimerApp:
         plt.close()
         print("   Salvo: confusion_xgb.png")
         
-        # Exibir resultados
         print("\n" + "="*70)
         print("=== CLASSIFICADOR RASO (XGBOOST) - TESTE ===")
         print("="*70)
@@ -3733,7 +3690,6 @@ class AlzheimerApp:
                 img_array = np.array(img_pil).astype(np.float32) / 255.0
                 
                 # Aplicar preprocess_input do ResNet50
-                from tensorflow.keras.applications.resnet50 import preprocess_input
                 img_array = preprocess_input(img_array * 255.0)
                 
                 return img_array
