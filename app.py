@@ -5839,16 +5839,6 @@ class AlzheimerApp:
         )
 
     def extrair_descritores_ventriculo(self, mask, image_id=None):
-        """
-        Extrai descritores morfológicos do ventrículo segmentado.
-        
-        Args:
-            mask: numpy array 2D binário (0=fundo, 255=região ou 0=fundo, 1=região)
-            image_id: identificador da imagem (nome do arquivo ou índice)
-            
-        Returns:
-            dict: dicionário com os descritores ou None se falhar
-        """
         try:
             # Garante que mask seja binária (0/1)
             if mask.dtype != np.uint8:
